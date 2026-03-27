@@ -2790,7 +2790,7 @@ async function createTabElement(tab, isPinned = false, isBookmarkOnly = false) {
     // Set up action button
     actionButton.classList.remove('tab-close');
     actionButton.classList.add(isBookmarkOnly ? 'tab-remove' : 'tab-close');
-    actionButton.innerHTML = isBookmarkOnly ? '−' : '×';
+    actionButton.innerHTML = isBookmarkOnly ? '×' : (isPinned ? '−' : '×');
     actionButton.title = isBookmarkOnly ? 'Remove Bookmark' : 'Close Tab';
     actionButton.addEventListener('click', async (e) => {
         e.stopPropagation();
