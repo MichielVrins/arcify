@@ -431,22 +431,13 @@ async function runAutoArchiveCheck() {
         const activityResult = await chrome.storage.local.get(TAB_ACTIVITY_STORAGE_KEY);
         const tabActivity = activityResult[TAB_ACTIVITY_STORAGE_KEY] || {};
 
-        // --- Fetch spaces data to check against bookmarks ---
-        const spacesResult = await chrome.storage.local.get('spaces');
-        const spaces = spacesResult.spaces || [];
+        const sidebarState = await Utils.getSidebarState();
         const bookmarkedUrls = new Set();
-        spaces.forEach(space => {
-            if (space.spaceBookmarks) {
-                // Assuming spaceBookmarks stores URLs directly.
-                // If it stores tab IDs or other objects, adjust this logic.
-                space.spaceBookmarks.forEach(bookmark => {
-                    // Check if bookmark is an object with a url or just a url string
-                    if (typeof bookmark === 'string') {
-                        bookmarkedUrls.add(bookmark);
-                    } else if (bookmark && bookmark.url) {
-                        bookmarkedUrls.add(bookmark.url);
-                    }
-                });
+        (sidebarState.spaceBookmarks || []).forEach(bookmark => {
+            if (typeof bookmark === 'string') {
+                bookmarkedUrls.add(bookmark);
+            } else if (bookmark && bookmark.url) {
+                bookmarkedUrls.add(bookmark.url);
             }
         });
 
@@ -487,18 +478,11 @@ async function runAutoArchiveCheck() {
             const tabData = {
                 url: tab.url,
                 name: tab.title || tab.url, // Use URL if title is empty
-                spaceId: tab.groupId // Archive within its current group/space
+                collectionId: 'main'
             };
-
-            // Check if spaceId is valid (i.e., tab is actually in a group)
-            if (tabData.spaceId && tabData.spaceId !== chrome.tabGroups.TAB_GROUP_ID_NONE) {
-                await Utils.addArchivedTab(tabData);
-                await chrome.tabs.remove(tab.id); // Close the tab after archiving
-                await removeTabLastActivity(tab.id); // Remove activity timestamp after archiving
-            } else {
-                // Decide if you want to update its activity or leave it for next check
-                // await updateTabLastActivity(tab.id);
-            }
+            await Utils.addArchivedTab(tabData);
+            await chrome.tabs.remove(tab.id);
+            await removeTabLastActivity(tab.id);
         }
 
     } catch (error) {
@@ -673,16 +657,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     } else if (message.action === 'getActiveSpaceColor') {
         return handleAsyncMessage(async () => {
-            const spacesResult = await chrome.storage.local.get('spaces');
-            const spaces = spacesResult.spaces || [];
-            const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-            if (!activeTab || !activeTab.groupId || activeTab.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE) {
-                return { color: 'purple' };
-            }
-
-            const activeSpace = spaces.find(space => space.id === activeTab.groupId);
-            return { color: activeSpace?.color || 'purple' };
+            const sidebarState = await Utils.getSidebarState();
+            return { color: sidebarState?.color || 'purple' };
         }, sendResponse, 'getting active space color', { color: 'purple' });
 
     } else if (message.action === 'performSearch') {

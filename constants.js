@@ -171,3 +171,6 @@ export const AXIS = {
     X: 'x',
     Y: 'y',
 };
+
+// Temporary product direction: keep one internal space and hide multi-space UX.
+export const SINGLE_SPACE_MODE = true;

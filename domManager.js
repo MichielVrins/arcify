@@ -15,6 +15,7 @@
 import { Utils } from './utils.js';
 import { RESTORE_ICON } from './icons.js';
 import { Logger } from './logger.js';
+import { SINGLE_SPACE_MODE } from './constants.js';
 
 // DOM Elements
 const spacesList = document.getElementById('spacesList');
@@ -24,6 +25,19 @@ const newTabBtn = document.getElementById('newTabBtn');
 const spaceTemplate = document.getElementById('spaceTemplate');
 
 export function setupDOMElements(createNewSpace) {
+    const switcherContainer = document.querySelector('.space-switcher-container');
+    if (switcherContainer) {
+        switcherContainer.style.display = 'none';
+    }
+
+    newTabBtn.addEventListener('click', () => {
+        chrome.runtime.sendMessage({ command: "toggleSpotlightNewTab" });
+    });
+
+    if (SINGLE_SPACE_MODE) {
+        return;
+    }
+
     spaceSwitcher.addEventListener('wheel', (event) => {
         event.preventDefault();
 
@@ -203,96 +217,84 @@ export function showTabContextMenu(x, y, tab, isPinned, isBookmarkOnly, tabEleme
             contextMenu.appendChild(replaceBookmarkUrlOption);
         }
 
-        // Add a separator
-        const separator = document.createElement('div');
-        separator.className = 'context-menu-separator';
-        contextMenu.appendChild(separator);
-
-        // 2. Move to Space
-        const moveToSpaceItem = document.createElement('div');
-        moveToSpaceItem.className = 'context-menu-item with-submenu';
-        moveToSpaceItem.textContent = 'Move to Space';
-
-        const submenu = document.createElement('div');
-        submenu.className = 'context-menu submenu';
-
-        // Add active spaces
-        const currentSpace = spaces.find(s => s.temporaryTabs.includes(tab.id) || s.spaceBookmarks.includes(tab.id));
-        const otherActiveSpaces = spaces.filter(s => s.id !== currentSpace?.id);
-        otherActiveSpaces.forEach(space => {
-            const submenuItem = document.createElement('div');
-            submenuItem.className = 'context-menu-item';
-            submenuItem.textContent = space.name;
-            submenuItem.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                contextMenu.remove(); // Close menu immediately for better UX
-
-                await moveTabToSpace(tab.id, space.id, false);
-                // Set the space as active, but prevent it from auto-activating a different tab
-                await setActiveSpace(space.id, false);
-                // Explicitly activate the tab that was just moved
-                await chrome.tabs.update(tab.id, { active: true });
-            });
-            submenu.appendChild(submenuItem);
-        });
-
-        // Add inactive spaces
-        const activeSpaceNames = new Set(spaces.map(s => s.name));
-        const inactiveSpaceFolders = allBookmarkSpaceFolders.filter(f => !f.url && !activeSpaceNames.has(f.title));
-
-        if (otherActiveSpaces.length > 0 && inactiveSpaceFolders.length > 0) {
+        if (!SINGLE_SPACE_MODE) {
             const separator = document.createElement('div');
             separator.className = 'context-menu-separator';
-            submenu.appendChild(separator);
-        }
+            contextMenu.appendChild(separator);
 
-        inactiveSpaceFolders.forEach(folder => {
-            const submenuItem = document.createElement('div');
-            submenuItem.className = 'context-menu-item';
-            submenuItem.textContent = folder.title;
-            submenuItem.addEventListener('click', (e) => {
-                e.stopPropagation();
-                createSpaceFromInactive(folder.title, tab);
-                contextMenu.remove();
-            });
-            submenu.appendChild(submenuItem);
-        });
+            const moveToSpaceItem = document.createElement('div');
+            moveToSpaceItem.className = 'context-menu-item with-submenu';
+            moveToSpaceItem.textContent = 'Move to Space';
 
-        // Only add the "Move to" menu if there's somewhere to move to
-        if (submenu.hasChildNodes()) {
-            moveToSpaceItem.appendChild(submenu);
-            contextMenu.appendChild(moveToSpaceItem);
+            const submenu = document.createElement('div');
+            submenu.className = 'context-menu submenu';
 
-            // Adjust submenu position when it becomes visible
-            moveToSpaceItem.addEventListener('mouseenter', () => {
-                // Wait for next frame to ensure submenu is rendered
-                requestAnimationFrame(() => {
-                    const submenuRect = submenu.getBoundingClientRect();
-                    const parentRect = moveToSpaceItem.getBoundingClientRect();
-                    const viewportWidth = window.innerWidth;
-                    const viewportHeight = window.innerHeight;
+            const currentSpace = spaces.find(s => s.temporaryTabs.includes(tab.id) || s.spaceBookmarks.includes(tab.id));
+            const otherActiveSpaces = spaces.filter(s => s.id !== currentSpace?.id);
+            otherActiveSpaces.forEach(space => {
+                const submenuItem = document.createElement('div');
+                submenuItem.className = 'context-menu-item';
+                submenuItem.textContent = space.name;
+                submenuItem.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    contextMenu.remove();
 
-                    // Reset any previous adjustments
-                    submenu.style.left = '';
-                    submenu.style.right = '';
-                    submenu.style.top = '';
-                    submenu.style.bottom = '';
-
-                    // Check if submenu overflows right edge
-                    if (parentRect.right + submenuRect.width > viewportWidth) {
-                        // Position to the left of parent instead
-                        submenu.style.left = 'auto';
-                        submenu.style.right = '100%';
-                    }
-
-                    // Check if submenu overflows bottom edge
-                    if (parentRect.top + submenuRect.height > viewportHeight) {
-                        // Align to bottom instead of top
-                        submenu.style.top = 'auto';
-                        submenu.style.bottom = '0';
-                    }
+                    await moveTabToSpace(tab.id, space.id, false);
+                    await setActiveSpace(space.id, false);
+                    await chrome.tabs.update(tab.id, { active: true });
                 });
+                submenu.appendChild(submenuItem);
             });
+
+            const activeSpaceNames = new Set(spaces.map(s => s.name));
+            const inactiveSpaceFolders = allBookmarkSpaceFolders.filter(f => !f.url && !activeSpaceNames.has(f.title));
+
+            if (otherActiveSpaces.length > 0 && inactiveSpaceFolders.length > 0) {
+                const separator = document.createElement('div');
+                separator.className = 'context-menu-separator';
+                submenu.appendChild(separator);
+            }
+
+            inactiveSpaceFolders.forEach(folder => {
+                const submenuItem = document.createElement('div');
+                submenuItem.className = 'context-menu-item';
+                submenuItem.textContent = folder.title;
+                submenuItem.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    createSpaceFromInactive(folder.title, tab);
+                    contextMenu.remove();
+                });
+                submenu.appendChild(submenuItem);
+            });
+
+            if (submenu.hasChildNodes()) {
+                moveToSpaceItem.appendChild(submenu);
+                contextMenu.appendChild(moveToSpaceItem);
+
+                moveToSpaceItem.addEventListener('mouseenter', () => {
+                    requestAnimationFrame(() => {
+                        const submenuRect = submenu.getBoundingClientRect();
+                        const parentRect = moveToSpaceItem.getBoundingClientRect();
+                        const viewportWidth = window.innerWidth;
+                        const viewportHeight = window.innerHeight;
+
+                        submenu.style.left = '';
+                        submenu.style.right = '';
+                        submenu.style.top = '';
+                        submenu.style.bottom = '';
+
+                        if (parentRect.right + submenuRect.width > viewportWidth) {
+                            submenu.style.left = 'auto';
+                            submenu.style.right = '100%';
+                        }
+
+                        if (parentRect.top + submenuRect.height > viewportHeight) {
+                            submenu.style.top = 'auto';
+                            submenu.style.bottom = '0';
+                        }
+                    });
+                });
+            }
         }
     }
 
@@ -335,8 +337,9 @@ export function showTabContextMenu(x, y, tab, isPinned, isBookmarkOnly, tabEleme
     document.addEventListener('click', closeContextMenu, { capture: true });
 }
 
-export async function showArchivedTabsPopup(activeSpaceId) {
-    const spaceElement = document.querySelector(`[data-space-id="${activeSpaceId}"]`);
+export async function showArchivedTabsPopup() {
+    const spaceElement = document.querySelector('.space');
+    if (!spaceElement) return;
     const popup = spaceElement.querySelector('.archived-tabs-popup');
     const list = popup.querySelector('.archived-tabs-list');
     const message = popup.querySelector('.no-archived-tabs-message');
@@ -487,9 +490,8 @@ export function setupQuickPinListener(moveTabToSpace, moveTabToPinned, moveTabTo
     chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
         if (request.command === "quickPinToggle" || request.command === "toggleSpacePin") {
             Logger.log(`[QuickPin] Received command: ${request.command}`, { request });
-            chrome.storage.local.get('spaces', function (result) {
-                const spaces = result.spaces || [];
-                Logger.log("[QuickPin] Loaded spaces from storage:", spaces);
+            Utils.getSidebarState().then((sidebarState) => {
+                Logger.log("[QuickPin] Loaded sidebar state:", sidebarState);
 
                 const getTabAndToggle = (tabToToggle) => {
                     if (!tabToToggle) {
@@ -498,25 +500,17 @@ export function setupQuickPinListener(moveTabToSpace, moveTabToPinned, moveTabTo
                     }
                     Logger.log("[QuickPin] Toggling pin state for tab:", tabToToggle);
 
-                    const spaceWithTempTab = spaces.find(space =>
-                        space.temporaryTabs.includes(tabToToggle.id)
-                    );
-
-                    if (spaceWithTempTab) {
-                        Logger.log(`[QuickPin] Tab ${tabToToggle.id} is a temporary tab in space "${spaceWithTempTab.name}". Pinning it.`);
-                        moveTabToSpace(tabToToggle.id, spaceWithTempTab.id, true);
-                        moveTabToPinned(spaceWithTempTab, tabToToggle);
+                    if (sidebarState.temporaryTabs.includes(tabToToggle.id)) {
+                        Logger.log(`[QuickPin] Tab ${tabToToggle.id} is a temporary tab. Pinning it.`);
+                        moveTabToSpace(tabToToggle.id, sidebarState.id, true);
+                        moveTabToPinned(sidebarState, tabToToggle);
                     } else {
-                        const spaceWithBookmark = spaces.find(space =>
-                            space.spaceBookmarks.includes(tabToToggle.id)
-                        );
-
-                        if (spaceWithBookmark) {
-                            Logger.log(`[QuickPin] Tab ${tabToToggle.id} is a bookmarked tab in space "${spaceWithBookmark.name}". Unpinning it.`);
-                            moveTabToSpace(tabToToggle.id, spaceWithBookmark.id, false);
-                            moveTabToTemp(spaceWithBookmark, tabToToggle);
+                        if (sidebarState.spaceBookmarks.includes(tabToToggle.id)) {
+                            Logger.log(`[QuickPin] Tab ${tabToToggle.id} is a pinned tab. Unpinning it.`);
+                            moveTabToSpace(tabToToggle.id, sidebarState.id, false);
+                            moveTabToTemp(sidebarState, tabToToggle);
                         } else {
-                            Logger.warn(`[QuickPin] Tab ${tabToToggle.id} not found in any space as temporary or bookmarked.`);
+                            Logger.warn(`[QuickPin] Tab ${tabToToggle.id} not found in the sidebar state.`);
                         }
                     }
                 };
@@ -574,12 +568,6 @@ export function setupQuickPinListener(moveTabToSpace, moveTabToPinned, moveTabTo
             }
         } else if (request.action === "activatePinnedTab") {
             Logger.log("[Spotlight] Activating pinned tab:", request);
-
-            // Switch to the space if needed
-            if (request.spaceId && currentActiveSpaceId !== request.spaceId) {
-                Logger.log("[Spotlight] Switching to space:", request.spaceId, request.spaceName);
-                setActiveSpaceFunc(request.spaceId);
-            }
 
             // Use the utility function to handle pinned tab activation
             activatePinnedTabByURL(request.bookmarkUrl, request.spaceId, request.spaceName);

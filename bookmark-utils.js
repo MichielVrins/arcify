@@ -14,6 +14,7 @@
  */
 
 import { Logger } from './logger.js';
+import { SINGLE_SPACE_MODE } from './constants.js';
 
 export const BookmarkUtils = {
 
@@ -249,8 +250,9 @@ export const BookmarkUtils = {
             await Utils.setTabNameOverride(newTab.id, bookmarkData.url, bookmarkData.title);
         }
 
-        // Immediately group the new tab
-        await chrome.tabs.group({ tabIds: [newTab.id], groupId: targetSpaceId });
+        if (!SINGLE_SPACE_MODE) {
+            await chrome.tabs.group({ tabIds: [newTab.id], groupId: targetSpaceId });
+        }
 
         if (isPinned) {
             // Update space data - add to spaceBookmarks for pinned tabs

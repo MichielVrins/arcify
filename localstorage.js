@@ -1,14 +1,13 @@
 /**
  * LocalStorage - Bookmark-based persistence and Chrome storage utilities
  * 
- * Purpose: Manages space bookmarks and provides legacy storage compatibility
- * Key Functions: Arcify bookmark folder management, space bookmark operations, storage synchronization
+ * Purpose: Manages Arcify bookmark persistence and provides legacy storage compatibility
+ * Key Functions: Arcify bookmark folder management and storage synchronization
  * Architecture: Static utility object for bookmark-based data persistence
  * 
  * Critical Notes:
- * - Creates and manages "Arcify" bookmark folder for space persistence
+ * - Creates and manages the "Arcify" bookmark folder for pinned tabs/folders
  * - Provides bookmark-based storage as alternative to chrome.storage
- * - Used for space bookmark functionality (separate from main space data in chrome.storage)
  * - Handles bookmark folder creation and organization automatically
  */
 
@@ -23,17 +22,7 @@ const LocalStorage = {
         return folder;
     },
     getOrCreateSpaceFolder: async function (spaceName) {
-        const arcifyFolder = await this.getOrCreateArcifyFolder();
-        const children = await chrome.bookmarks.getChildren(arcifyFolder.id);
-        let spaceFolder = children.find((f) => f.title === spaceName);
-
-        if (!spaceFolder) {
-            spaceFolder = await chrome.bookmarks.create({
-                parentId: arcifyFolder.id,
-                title: spaceName
-            });
-        }
-        return spaceFolder;
+        return this.getOrCreateArcifyFolder();
     },
 
     // --- Recursive Helper Function to Merge Contents ---
