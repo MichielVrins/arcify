@@ -872,6 +872,27 @@ function saveSidebarState() {
     });
 }
 
+async function cleanTemporaryTabs() {
+    if (!sidebarState) {
+        return;
+    }
+
+    const tabIdsToClose = [...(sidebarState.temporaryTabs ?? [])];
+    if (tabIdsToClose.length === 0) {
+        return;
+    }
+
+    sidebarState.temporaryTabs = [];
+    sidebarState.lastTab = sidebarState.pinnedTabIds[0] ?? null;
+    saveSidebarState();
+
+    try {
+        await chrome.tabs.remove(tabIdsToClose);
+    } catch (error) {
+        Logger.warn('Failed to clean temporary tabs:', error);
+    }
+}
+
 async function moveTabToPinned(state, tab) {
     state.temporaryTabs = state.temporaryTabs.filter(id => id !== tab.id);
     if (!state.pinnedTabIds.includes(tab.id)) {
@@ -2387,6 +2408,119 @@ async function createTabElement(tab, isPinned = false, isBookmarkOnly = false) {
     return tabElement;
 }
 
+async function handlePinnedStateChange(tabId, tab, tabElement, isPinnedNow) {
+    if (isPinnedNow) {
+        const stateWithTab = sidebarOwnsTab(tabId) ? sidebarState : null;
+
+        if (stateWithTab && stateWithTab.pinnedTabIds.includes(tabId)) {
+            const bookmarkRoot = await getBookmarkRootFolder();
+            await BookmarkUtils.removeBookmarkByUrl(bookmarkRoot.id, tab.url);
+        }
+
+        if (sidebarState) {
+            sidebarState.pinnedTabIds = sidebarState.pinnedTabIds.filter(id => id !== tabId);
+            sidebarState.temporaryTabs = sidebarState.temporaryTabs.filter(id => id !== tabId);
+        }
+        await Utils.removePinnedTabState(tabId);
+        saveSidebarState();
+        tabElement.remove();
+        return;
+    }
+
+    moveTabInSidebar(tabId, false);
+}
+
+async function refreshTabTextDisplay(tabId, tab, tabElement) {
+    const titleDisplay = tabElement.querySelector('.tab-title-display');
+    const domainDisplay = tabElement.querySelector('.tab-domain-display');
+    const titleInput = tabElement.querySelector('.tab-title-input');
+
+    if (!titleDisplay || !domainDisplay || !titleInput || document.activeElement === titleInput) {
+        return;
+    }
+
+    const overrides = await Utils.getTabNameOverrides();
+    const override = overrides[tabId];
+    let displayTitle = tab.title;
+    let displayDomain = null;
+    const pinnedUrl = tabElement.dataset.pinnedUrl || (await Utils.getPinnedTabState(tabId))?.pinnedUrl || null;
+    const isNavigatedAway = Boolean(pinnedUrl && tab.url && Utils.getPinnedUrlKey(tab.url) !== Utils.getPinnedUrlKey(pinnedUrl));
+
+    if (override && !isNavigatedAway) {
+        displayTitle = override.name;
+    }
+
+    titleDisplay.textContent = displayTitle;
+
+    if (isNavigatedAway) {
+        try {
+            const pinnedDomain = new URL(pinnedUrl).hostname;
+            const currentDomain = new URL(tab.url).hostname;
+            if (currentDomain && pinnedDomain && currentDomain !== pinnedDomain) {
+                displayDomain = currentDomain;
+            }
+        } catch (e) {
+            // Ignore invalid URLs.
+        }
+    }
+
+    if (displayDomain) {
+        domainDisplay.textContent = displayDomain;
+        domainDisplay.style.display = 'block';
+    } else {
+        domainDisplay.style.display = 'none';
+    }
+
+    titleInput.value = (override && !isNavigatedAway) ? override.name : tab.title;
+}
+
+async function refreshTabFavicon(tabId, tab, changeInfo, tabElement) {
+    let faviconElement = tabElement.querySelector('.tab-favicon');
+    if (!faviconElement) {
+        faviconElement = tabElement.querySelector('img');
+    }
+
+    if (!faviconElement) {
+        Logger.log('No favicon element found', faviconElement, tabElement);
+        return;
+    }
+
+    if (changeInfo.url || changeInfo.favIconUrl) {
+        faviconElement.src = tab.favIconUrl;
+        faviconElement.onerror = () => {
+            faviconElement.src = tab.favIconUrl;
+            faviconElement.onerror = () => { faviconElement.src = 'assets/default_icon.png'; };
+        };
+    }
+
+    if (!changeInfo.url) {
+        return;
+    }
+
+    faviconElement.src = Utils.getFaviconUrl(changeInfo.url);
+    tabElement.dataset.url = tab.url;
+
+    if (!tabElement.closest('[data-tab-type="pinned"]')) {
+        return;
+    }
+
+    const pinnedUrl = tabElement.dataset.pinnedUrl || (await Utils.getPinnedTabState(tabId))?.pinnedUrl;
+    const shouldEnableBack = Boolean(pinnedUrl && tab.url && Utils.getPinnedUrlKey(tab.url) !== Utils.getPinnedUrlKey(pinnedUrl));
+    faviconElement.classList.toggle('pinned-back', shouldEnableBack);
+    faviconElement.title = shouldEnableBack ? 'Back to Pinned URL' : '';
+    const slash = tabElement.querySelector('.tab-url-changed-slash');
+    if (slash) slash.classList.toggle('visible', shouldEnableBack);
+}
+
+function handleTabUpdateSideEffects(tabId, changeInfo) {
+    if (changeInfo.active !== undefined && changeInfo.active) {
+        activateTabInDOM(tabId);
+    }
+    if (changeInfo.status == 'complete' || changeInfo.status == 'loading') {
+        scrollToTab(tabId, 100);
+    }
+}
+
 function handleTabCreated(tab) {
     if (isOpeningBookmark) {
         Logger.log('Skipping tab creation handler - bookmark is being opened');
@@ -2423,116 +2557,20 @@ function handleTabUpdate(tabId, changeInfo, tab) {
         }
         Logger.log('Tab updated:', tabId, changeInfo, sidebarState);
 
-        // Update tab element if it exists
         const tabElement = document.querySelector(`[data-tab-id="${tabId}"]`);
-        if (tabElement) {
-            // Update Favicon if URL changed
-            if (changeInfo.url || changeInfo.favIconUrl) {
-                const img = tabElement.querySelector('img');
-                if (img) {
-                    img.src = tab.favIconUrl;
-                    img.onerror = () => {
-                        img.src = tab.favIconUrl;
-                        img.onerror = () => { img.src = 'assets/default_icon.png'; }; // Fallback favicon
-                    };
-                }
-            }
-
-            const titleDisplay = tabElement.querySelector('.tab-title-display');
-            const domainDisplay = tabElement.querySelector('.tab-domain-display');
-            const titleInput = tabElement.querySelector('.tab-title-input'); // Get input element
-            let displayTitle = tab.title; // Use potentially new title
-
-            if (changeInfo.pinned !== undefined) {
-                if (changeInfo.pinned) {
-                    const stateWithTab = sidebarOwnsTab(tabId) ? sidebarState : null;
-
-                    if (stateWithTab && stateWithTab.pinnedTabIds.includes(tabId)) {
-                        const bookmarkRoot = await getBookmarkRootFolder();
-                        await BookmarkUtils.removeBookmarkByUrl(bookmarkRoot.id, tab.url);
-                    }
-
-                    if (sidebarState) {
-                        sidebarState.pinnedTabIds = sidebarState.pinnedTabIds.filter(id => id !== tabId);
-                        sidebarState.temporaryTabs = sidebarState.temporaryTabs.filter(id => id !== tabId);
-                    }
-                    await Utils.removePinnedTabState(tabId);
-                    saveSidebarState();
-                    tabElement.remove();
-                } else {
-                    moveTabInSidebar(tabId, false);
-                }
-                // Update pinned favicons for both pinning and unpinning
-                updatePinnedFavicons();
-            } else if (titleDisplay && domainDisplay && titleInput) { // Check if elements exist
-                // Don't update if the input field is currently focused
-                if (document.activeElement !== titleInput) {
-                    const overrides = await Utils.getTabNameOverrides();
-                    Logger.log('changeInfo', changeInfo);
-                    Logger.log('overrides', overrides);
-                    Logger.log('tab.url', tab.url); // Log the tab URL her
-                    const override = overrides[tabId]; // Use potentially new URL
-                    Logger.log('override', override); // Log the override object here
-                    let displayDomain = null;
-                    const pinnedUrl = tabElement.dataset.pinnedUrl || (await Utils.getPinnedTabState(tabId))?.pinnedUrl || null;
-                    const isNavigatedAway = Boolean(pinnedUrl && tab.url && Utils.getPinnedUrlKey(tab.url) !== Utils.getPinnedUrlKey(pinnedUrl));
-
-                    // Only force override title when we're still on the pinned URL.
-                    if (override && !isNavigatedAway) {
-                        displayTitle = override.name;
-                    }
-                    titleDisplay.textContent = displayTitle;
-
-                    // Domain subtitle only when navigated away from pinned domain.
-                    if (isNavigatedAway) {
-                        try {
-                            const pinnedDomain = new URL(pinnedUrl).hostname;
-                            const currentDomain = new URL(tab.url).hostname;
-                            if (currentDomain && pinnedDomain && currentDomain !== pinnedDomain) {
-                                displayDomain = currentDomain;
-                            }
-                        } catch (e) { /* Ignore invalid URLs */ }
-                    }
-                    if (displayDomain) {
-                        domainDisplay.textContent = displayDomain;
-                        domainDisplay.style.display = 'block';
-                    } else {
-                        domainDisplay.style.display = 'none';
-                    }
-                    // Update input value only if not focused (might overwrite user typing)
-                    titleInput.value = (override && !isNavigatedAway) ? override.name : tab.title;
-                }
-            }
-            let faviconElement = tabElement.querySelector('.tab-favicon');
-            if (!faviconElement) {
-                // fallback to img element
-                faviconElement = tabElement.querySelector('img');
-            }
-            if (changeInfo.url && faviconElement) {
-                faviconElement.src = Utils.getFaviconUrl(changeInfo.url);
-                // Do NOT auto-overwrite the pinned bookmark URL on navigation.
-                // Instead, make favicon look actionable and show the Arc-like label only on favicon hover.
-                tabElement.dataset.url = tab.url;
-                if (tabElement.closest('[data-tab-type="pinned"]')) {
-                    const pinnedUrl = tabElement.dataset.pinnedUrl || (await Utils.getPinnedTabState(tabId))?.pinnedUrl;
-                    const shouldEnableBack = Boolean(pinnedUrl && tab.url && Utils.getPinnedUrlKey(tab.url) !== Utils.getPinnedUrlKey(pinnedUrl));
-                    faviconElement.classList.toggle('pinned-back', shouldEnableBack);
-                    faviconElement.title = shouldEnableBack ? 'Back to Pinned URL' : '';
-                    const slash = tabElement.querySelector('.tab-url-changed-slash');
-                    if (slash) slash.classList.toggle('visible', shouldEnableBack);
-                }
-            } else if (!faviconElement) {
-                Logger.log('No favicon element found', faviconElement, tabElement);
-            }
-            // Update active state when tab's active state changes
-            if (changeInfo.active !== undefined && changeInfo.active) {
-                activateTabInDOM(tabId);
-            }
-            if (changeInfo.status == 'complete' || changeInfo.status == 'loading') {
-                // Scroll to the newly created tab
-                scrollToTab(tabId, 100);
-            }
+        if (!tabElement) {
+            return;
         }
+
+        if (changeInfo.pinned !== undefined) {
+            await handlePinnedStateChange(tabId, tab, tabElement, changeInfo.pinned);
+            updatePinnedFavicons();
+            return;
+        }
+
+        await refreshTabTextDisplay(tabId, tab, tabElement);
+        await refreshTabFavicon(tabId, tab, changeInfo, tabElement);
+        handleTabUpdateSideEffects(tabId, changeInfo);
     });
 }
 
