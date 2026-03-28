@@ -597,7 +597,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.tabs.onMoved.addListener(handleTabMove);
     chrome.tabs.onActivated.addListener(handleTabActivated);
     // Setup Quick Pin listener
-    setupQuickPinListener(moveTabInSidebar, moveTabToPinned, moveTabToTemp);
+    setupQuickPinListener(moveTabInSidebar, moveTabToPinned, moveTabToTemp, activatePinnedTabByURL);
 
     // Tab navigation listener
     // Add event listener for placeholder close button
@@ -1271,13 +1271,6 @@ async function handleBookmarkOperations(event, draggingElement, container, targe
  * @param {HTMLElement} draggingElement - The tab element that was dragged
  * @param {HTMLElement} container - The container the tab was dropped into
  */
-async function syncTabOrderToChrome(draggingElement, container) {
-    // Legacy implementation (index-math) intentionally disabled.
-    // The new, safer approach is `reconcileTabOrdering(...)` which enforces a single source of truth
-    // and uses batched moves rather than fragile index calculations.
-    return;
-}
-
 function uniqPreserveOrder(ids) {
     const out = [];
     const seen = new Set();
@@ -1325,39 +1318,6 @@ function getTempSectionTabIds(collectionElement) {
     return uniqPreserveOrder(
         Array.from(tempContainer.querySelectorAll('.tab[data-tab-id]')).map(el => parseInt(el.dataset.tabId))
     );
-}
-
-function markTabsSyncingToChrome(tabIds, ttlMs = 600) {
-    const ids = uniqPreserveOrder(tabIds);
-    ids.forEach(id => syncingToChrome.add(id));
-    setTimeout(() => {
-        ids.forEach(id => syncingToChrome.delete(id));
-    }, ttlMs);
-}
-
-function unmarkTabsSyncingToChrome(tabIds) {
-    uniqPreserveOrder(tabIds).forEach(id => syncingToChrome.delete(id));
-}
-
-// Retry state for reconcile when Chrome is mid-drag and temporarily blocks tab edits.
-const reconcileRetryState = new Map();
-
-function scheduleReconcileRetry(opts, attempt, delayMs, reason) {
-    const retryKey = MAIN_SIDEBAR_ID;
-    const existing = reconcileRetryState.get(retryKey);
-    if (existing?.timeoutId) {
-        clearTimeout(existing.timeoutId);
-    }
-    const timeoutId = setTimeout(async () => {
-        reconcileRetryState.delete(retryKey);
-        try {
-            await reconcileTabOrdering({ ...opts, _retryAttempt: attempt });
-        } catch (e) {
-            Logger.warn('[ReconcileOrder] Retry failed:', e);
-        }
-    }, delayMs);
-    reconcileRetryState.set(retryKey, { timeoutId, attempt, opts });
-    Logger.log('[ReconcileOrder] ⏳ Scheduled retry', { attempt, delayMs, reason });
 }
 
 async function reconcileTabOrdering(opts = {}) {
@@ -2705,17 +2665,9 @@ async function handleTabRemove(tabId) {
 // Track pending tab moves to debounce rapid successive moves
 const pendingTabMoves = new Map();
 const processingTabMoves = new Set();
-// Track tabs being synced from DOM to Chrome to prevent infinite loops
-const syncingToChrome = new Set();
 
 function handleTabMove(tabId, moveInfo) {
     if (isOpeningBookmark) {
-        return;
-    }
-
-    // If we're syncing this tab from DOM to Chrome, ignore the Chrome -> DOM sync to prevent loop
-    if (syncingToChrome.has(tabId)) {
-        Logger.log('[TabMove] ⚠️ Ignoring move event - tab is being synced to Chrome', tabId);
         return;
     }
 

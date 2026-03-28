@@ -300,7 +300,7 @@ export function showUrlCopyToast() {
     }, 2000);
 }
 
-export function setupQuickPinListener(moveTabInSidebar, moveTabToPinned, moveTabToTemp) {
+export function setupQuickPinListener(moveTabInSidebar, moveTabToPinned, moveTabToTemp, activatePinnedTabByURL) {
     chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
         if (request.command === "quickPinToggle" || request.command === "togglePin") {
             Logger.log(`[QuickPin] Received command: ${request.command}`, { request });
@@ -383,7 +383,11 @@ export function setupQuickPinListener(moveTabInSidebar, moveTabToPinned, moveTab
         } else if (request.action === "activatePinnedTab") {
             Logger.log("[Spotlight] Activating pinned tab:", request);
 
-            activatePinnedTabByURL(request.bookmarkUrl);
+            if (typeof activatePinnedTabByURL === 'function') {
+                activatePinnedTabByURL(request.bookmarkUrl);
+            } else {
+                Logger.warn('[Spotlight] activatePinnedTabByURL handler is missing');
+            }
         }
     });
 }
@@ -429,14 +433,6 @@ export function getDragAfterElement(container, position, options = {}) {
 // ============================================================================
 // Container Query Helpers
 // ============================================================================
-
-/**
- * Get the main sidebar view element
- * @returns {HTMLElement|null}
- */
-export function getCollectionElement() {
-    return document.querySelector('.sidebar-view');
-}
 
 /**
  * Get pinned container for a sidebar view element
@@ -527,4 +523,3 @@ export function getDropPosition(element, clientX, clientY, isHorizontal = false)
         return clientY < centerY ? 'above' : 'below';
     }
 }
-

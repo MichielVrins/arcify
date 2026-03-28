@@ -12,9 +12,7 @@
  * - Settings changes automatically sync across extension contexts
  */
 
-import { BookmarkUtils } from './bookmark-utils.js';
 import { Logger } from './logger.js';
-import { LocalStorage } from './localstorage.js';
 
 const MAX_ARCHIVED_TABS = 100;
 const ARCHIVED_TABS_KEY = 'archivedTabs';
@@ -22,32 +20,6 @@ const SIDEBAR_STATE_KEY = 'sidebarState';
 const MAIN_SIDEBAR_ID = 'main';
 
 const Utils = {
-
-    processBookmarkFolder: async function (folder) {
-        const bookmarks = [];
-        const items = await chrome.bookmarks.getChildren(folder.id);
-        const tabs = await chrome.tabs.query({ currentWindow: true });
-        for (const item of items) {
-            if (item.url) {
-                // This is a bookmark
-                const tab = tabs.find(t => t.url === item.url);
-                if (tab) {
-                    bookmarks.push(tab.id);
-                    // Set tab name override with the bookmark's title
-                    if (item.title && item.title !== tab.title) { // Only override if bookmark title is present and different
-                        await this.setTabNameOverride(tab.id, tab.url, item.title);
-                        Logger.log(`Override set for tab ${tab.id} from bookmark: ${item.title}`);
-                    }
-                }
-            } else {
-                // This is a folder, recursively process it
-                const subFolderBookmarks = await this.processBookmarkFolder(item, groupId);
-                bookmarks.push(...subFolderBookmarks);
-            }
-        }
-
-        return bookmarks;
-    },
 
     // Helper function to generate UUID (If you want to move this too)
     generateUUID: function () {
@@ -227,49 +199,6 @@ const Utils = {
         }
     },
 
-    updateBookmarkTitleIfNeeded: async function (tab, activeState, newTitle) {
-        Logger.log(`Attempting to update bookmark for pinned tab ${tab.id} in sidebar "${activeState.name}" to title: ${newTitle}`);
-
-        try {
-            const bookmarkRoot = await LocalStorage.getOrCreateArcifyFolder();
-            if (!bookmarkRoot) {
-                Logger.error(`Bookmark root for sidebar "${activeState.name}" not found.`);
-                return;
-            }
-
-            // Recursive function to find and update the bookmark
-            const findAndUpdate = async (folderId) => {
-                const items = await chrome.bookmarks.getChildren(folderId);
-                for (const item of items) {
-                    if (item.url && item.url === tab.url) {
-                        // Found the bookmark
-                        // Avoid unnecessary updates if title is already correct
-                        if (item.title !== newTitle) {
-                            Logger.log(`Found bookmark ${item.id} for URL ${tab.url}. Updating title to "${newTitle}"`);
-                            await chrome.bookmarks.update(item.id, { title: newTitle });
-                        } else {
-                            Logger.log(`Bookmark ${item.id} title already matches "${newTitle}". Skipping update.`);
-                        }
-                        return true; // Found
-                    } else if (!item.url) {
-                        // It's a subfolder, search recursively
-                        const found = await findAndUpdate(item.id);
-                        if (found) return true; // Stop searching if found in subfolder
-                    }
-                }
-                return false; // Not found in this folder
-            };
-
-            const updated = await findAndUpdate(bookmarkRoot.id);
-            if (!updated) {
-                Logger.log(`Bookmark for URL ${tab.url} not found in sidebar "${activeState.name}".`);
-            }
-
-        } catch (error) {
-            Logger.error(`Error updating bookmark for tab ${tab.id}:`, error);
-        }
-    },
-
     // Function to get if archiving is enabled
     isArchivingEnabled: async function () {
         const settings = await this.getSettings();
@@ -378,17 +307,6 @@ const Utils = {
         await chrome.storage.sync.set({ autoArchiveIdleMinutes: minutes });
     },
 
-    // Get Arc-like positioning setting (when enabled, tabs append to end instead of syncing with Chrome)
-    getUseArcLikePositioning: async function () {
-        const settings = await this.getSettings();
-        return settings.useArcLikePositioning;
-    },
-
-    // Set Arc-like positioning setting
-    setUseArcLikePositioning: async function (enabled) {
-        await chrome.storage.sync.set({ useArcLikePositioning: enabled });
-    },
-
     getInvertTabOrder: async function () {
         const settings = await this.getSettings();
         return settings.invertTabOrder;
@@ -398,35 +316,6 @@ const Utils = {
         await chrome.storage.sync.set({ invertTabOrder: enabled });
     },
 
-    // Search and remove bookmark by URL from a folder structure recursively
-    searchAndRemoveBookmark: async function (folderId, tabUrl, options = {}) {
-        const {
-            removeTabElement = false, // Whether to also remove the tab element from DOM
-            tabElement = null, // The tab element to remove if removeTabElement is true
-            logRemoval = false // Whether to log the removal
-        } = options;
-
-        const items = await chrome.bookmarks.getChildren(folderId);
-        for (const item of items) {
-            if (item.url === tabUrl) {
-                if (logRemoval) {
-                    Logger.log("removing bookmark", item);
-                }
-                await chrome.bookmarks.remove(item.id);
-
-                if (removeTabElement && tabElement) {
-                    tabElement.remove();
-                }
-
-                return true; // Bookmark found and removed
-            } else if (!item.url) {
-                // This is a folder, search recursively
-                const found = await this.searchAndRemoveBookmark(item.id, tabUrl, options);
-                if (found) return true;
-            }
-        }
-        return false; // Bookmark not found
-    },
     // Navigate to adjacent tab within the single Arcify sidebar
     _navigateTabInState: async function (tabId, sidebarState, direction) {
         const temporaryTabs = sidebarState?.temporaryTabs ?? [];
