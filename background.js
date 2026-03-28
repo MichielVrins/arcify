@@ -80,10 +80,7 @@ if (chrome.contextMenus) {
 
 // Listen for messages from the content script (sidebar)
 chrome.runtime.onMessage.addListener(async function (request, sender, sendResponse) {
-    // Forward the pin toggle command to the sidebar
-    if (request.command === "togglePin") {
-        chrome.runtime.sendMessage({ command: "togglePin", tabId: request.tabId });
-    } else if (request.command === "toggleSpotlight") {
+    if (request.command === "toggleSpotlight") {
         await injectSpotlightScript(SpotlightTabMode.CURRENT_TAB);
     } else if (request.command === "toggleSpotlightNewTab") {
         await injectSpotlightScript(SpotlightTabMode.NEW_TAB);

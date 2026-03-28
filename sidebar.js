@@ -564,26 +564,68 @@ function updateSpotlightButtonState(mode, isOpen) {
     newTabBtn.classList.toggle('spotlight-active', isOpen);
 }
 
+async function pinSidebarTab(tabToToggle) {
+    if (!tabToToggle) {
+        Logger.error("[Pin] No tab found to pin.");
+        return;
+    }
+
+    if (!sidebarState) {
+        Logger.error("[Pin] Sidebar state not initialized.");
+        return;
+    }
+
+    if (sidebarState.pinnedTabIds.includes(tabToToggle.id)) {
+        Logger.log(`[Pin] Tab ${tabToToggle.id} is already pinned.`);
+        return;
+    }
+
+    Logger.log(`[Pin] Pinning tab ${tabToToggle.id}.`);
+    await moveTabInSidebar(tabToToggle.id, true);
+    await moveTabToPinned(sidebarState, tabToToggle);
+}
+
+async function unpinSidebarTab(tabToToggle) {
+    if (!tabToToggle) {
+        Logger.error("[Pin] No tab found to unpin.");
+        return;
+    }
+
+    if (!sidebarState) {
+        Logger.error("[Pin] Sidebar state not initialized.");
+        return;
+    }
+
+    if (!sidebarState.pinnedTabIds.includes(tabToToggle.id)) {
+        Logger.log(`[Pin] Tab ${tabToToggle.id} is not pinned.`);
+        return;
+    }
+
+    Logger.log(`[Pin] Unpinning tab ${tabToToggle.id}.`);
+    await moveTabInSidebar(tabToToggle.id, false);
+    await moveTabToTemp(sidebarState, tabToToggle);
+}
+
 async function toggleSidebarPinForTab(tabToToggle) {
     if (!tabToToggle) {
         Logger.error("[QuickPin] No tab found to toggle.");
         return;
     }
 
-    const state = await Utils.getSidebarState();
-    Logger.log("[QuickPin] Toggling pin state for tab:", tabToToggle);
-
-    if (state.temporaryTabs.includes(tabToToggle.id)) {
-        Logger.log(`[QuickPin] Tab ${tabToToggle.id} is a temporary tab. Pinning it.`);
-        await moveTabInSidebar(tabToToggle.id, true);
-        await moveTabToPinned(state, tabToToggle);
+    if (!sidebarState) {
+        Logger.error("[QuickPin] Sidebar state not initialized.");
         return;
     }
 
-    if (state.pinnedTabIds.includes(tabToToggle.id)) {
+    if (sidebarState.temporaryTabs.includes(tabToToggle.id)) {
+        Logger.log(`[QuickPin] Tab ${tabToToggle.id} is a temporary tab. Pinning it.`);
+        await pinSidebarTab(tabToToggle);
+        return;
+    }
+
+    if (sidebarState.pinnedTabIds.includes(tabToToggle.id)) {
         Logger.log(`[QuickPin] Tab ${tabToToggle.id} is a pinned tab. Unpinning it.`);
-        await moveTabInSidebar(tabToToggle.id, false);
-        await moveTabToTemp(state, tabToToggle);
+        await unpinSidebarTab(tabToToggle);
         return;
     }
 
@@ -592,16 +634,20 @@ async function toggleSidebarPinForTab(tabToToggle) {
 
 function setupSidebarRuntimeListeners() {
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-        if (request.command === "quickPinToggle" || request.command === "togglePin") {
-            Logger.log(`[QuickPin] Received command: ${request.command}`, { request });
+        if (request.command === "quickPinToggle" || request.command === "pinTab" || request.command === "unpinTab") {
+            Logger.log(`[Pin] Received command: ${request.command}`, { request });
 
             if (request.command === "quickPinToggle") {
                 chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
                     await toggleSidebarPinForTab(tabs[0]);
                 });
-            } else if (request.command === "togglePin" && request.tabId) {
+            } else if ((request.command === "pinTab" || request.command === "unpinTab") && request.tabId) {
                 chrome.tabs.get(request.tabId, async (tab) => {
-                    await toggleSidebarPinForTab(tab);
+                    if (request.command === "pinTab") {
+                        await pinSidebarTab(tab);
+                    } else if (request.command === "unpinTab") {
+                        await unpinSidebarTab(tab);
+                    }
                 });
             }
             return false;

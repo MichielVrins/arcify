@@ -89,7 +89,7 @@ export function showTabContextMenu(x, y, tab, isPinned, isBookmarkOnly, tabEleme
         pinOption.className = 'context-menu-item';
         pinOption.textContent = isPinned ? 'Unpin Tab' : 'Pin Tab';
         pinOption.addEventListener('click', () => {
-            chrome.runtime.sendMessage({ command: 'togglePin', tabId: tab.id });
+            chrome.runtime.sendMessage({ command: isPinned ? 'unpinTab' : 'pinTab', tabId: tab.id });
             contextMenu.remove();
         });
         contextMenu.appendChild(pinOption);
