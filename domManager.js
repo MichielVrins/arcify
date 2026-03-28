@@ -98,12 +98,12 @@ export function showTabContextMenu(x, y, tab, isPinned, isBookmarkOnly, tabEleme
         if (isPinned && typeof onReplaceBookmarkUrlWithCurrent === 'function') {
             const replaceBookmarkUrlOption = document.createElement('div');
             replaceBookmarkUrlOption.className = 'context-menu-item';
-            replaceBookmarkUrlOption.textContent = 'Replace Bookmark URL with Current URL';
+            replaceBookmarkUrlOption.textContent = 'Replace Pinned URL with Current URL';
             replaceBookmarkUrlOption.addEventListener('click', async () => {
                 try {
                     await onReplaceBookmarkUrlWithCurrent(tab, tabElement);
                 } catch (e) {
-                    Logger.warn('[ContextMenu] Failed to replace bookmark URL with current URL:', e);
+                    Logger.warn('[ContextMenu] Failed to replace pinned URL with current URL:', e);
                 } finally {
                     contextMenu.remove();
                 }
@@ -386,7 +386,7 @@ export function hideAllDropIndicators() {
 }
 
 /**
- * Show a drop indicator on the target element
+ * Show a drop indicator on the target el   
  * @param {HTMLElement} targetElement - The element to show the indicator on
  * @param {string} position - Position: 'above', 'below', 'left', or 'right'
  * @param {boolean} isHorizontal - True for horizontal layout (favicons), false for vertical (tabs)

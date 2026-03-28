@@ -18,6 +18,35 @@ const MAX_ARCHIVED_TABS = 100;
 const ARCHIVED_TABS_KEY = 'archivedTabs';
 const SIDEBAR_STATE_KEY = 'sidebarState';
 const MAIN_SIDEBAR_ID = 'main';
+const PINNED_ITEM_TYPES = {
+    LINK: 'link',
+    FOLDER: 'folder'
+};
+
+function normalizePinnedItems(items) {
+    if (!Array.isArray(items)) return [];
+
+    return items
+        .map(item => {
+            if (!item || typeof item !== 'object') return null;
+
+            const type = item.type === PINNED_ITEM_TYPES.FOLDER ? PINNED_ITEM_TYPES.FOLDER : PINNED_ITEM_TYPES.LINK;
+            const normalized = {
+                id: item.id || crypto.randomUUID?.() || `item-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                type,
+                title: item.title || (type === PINNED_ITEM_TYPES.FOLDER ? 'Untitled' : 'Bookmark')
+            };
+
+            if (type === PINNED_ITEM_TYPES.FOLDER) {
+                normalized.children = normalizePinnedItems(item.children);
+            } else {
+                normalized.url = item.url || '';
+            }
+
+            return normalized;
+        })
+        .filter(Boolean);
+}
 
 const Utils = {
 
@@ -55,7 +84,6 @@ const Utils = {
             autoArchiveEnabled: false, // Default: disabled
             autoArchiveIdleMinutes: 360, // Default: 30 minutes
             enableSpotlight: true, // Default: enabled (controls both spotlight and custom new tab)
-            invertTabOrder: true, // Default: enabled (New tabs/High index on top)
             colorOverrides: null, // Default: no color overrides
             debugLoggingEnabled: false, // Default: disabled (controls debug logging)
             showAllOpenTabsInCollapsedFolders: false, // Default: Arc behavior (only show active tab in collapsed folder)
@@ -73,6 +101,7 @@ const Utils = {
             uuid: this.generateUUID(),
             name: defaultName,
             color: await this.getTabGroupColor(defaultName),
+            pinnedItems: [],
             pinnedTabIds: [],
             temporaryTabs: [],
             lastTab: null
@@ -87,6 +116,7 @@ const Utils = {
             ...(await this.getDefaultSidebarState()),
             ...migrated,
             id: MAIN_SIDEBAR_ID,
+            pinnedItems: normalizePinnedItems(migrated?.pinnedItems),
             pinnedTabIds: Array.isArray(migrated?.pinnedTabIds) ? migrated.pinnedTabIds : [],
             temporaryTabs: Array.isArray(migrated?.temporaryTabs) ? migrated.temporaryTabs : []
         };
@@ -100,6 +130,7 @@ const Utils = {
             ...(await this.getDefaultSidebarState()),
             ...sidebarState,
             id: MAIN_SIDEBAR_ID,
+            pinnedItems: normalizePinnedItems(sidebarState?.pinnedItems),
             pinnedTabIds: Array.isArray(sidebarState?.pinnedTabIds) ? sidebarState.pinnedTabIds : [],
             temporaryTabs: Array.isArray(sidebarState?.temporaryTabs) ? sidebarState.temporaryTabs : []
         };
@@ -170,9 +201,90 @@ const Utils = {
         const states = await this.getPinnedTabStates();
         states[tabId] = {
             pinnedUrl: state.pinnedUrl || null,
-            bookmarkId: state.bookmarkId || null
+            bookmarkId: state.bookmarkId || null,
+            pinnedItemId: state.pinnedItemId || null
         };
         await this.savePinnedTabStates(states);
+    },
+
+    walkPinnedItems: function (items, visitor, parent = null) {
+        if (!Array.isArray(items)) return;
+        items.forEach((item, index) => {
+            visitor(item, { parent, index });
+            if (item?.type === PINNED_ITEM_TYPES.FOLDER) {
+                this.walkPinnedItems(item.children || [], visitor, item);
+            }
+        });
+    },
+
+    findPinnedItemById: function (items, itemId, parent = null) {
+        if (!Array.isArray(items) || !itemId) return null;
+
+        for (let index = 0; index < items.length; index += 1) {
+            const item = items[index];
+            if (item.id === itemId) {
+                return { item, parent, index, siblings: items };
+            }
+            if (item.type === PINNED_ITEM_TYPES.FOLDER) {
+                const found = this.findPinnedItemById(item.children || [], itemId, item);
+                if (found) return found;
+            }
+        }
+
+        return null;
+    },
+
+    findPinnedItemByUrl: function (items, url, parent = null) {
+        if (!Array.isArray(items) || !url) return null;
+
+        for (let index = 0; index < items.length; index += 1) {
+            const item = items[index];
+            if (item.type === PINNED_ITEM_TYPES.LINK && item.url === url) {
+                return { item, parent, index, siblings: items };
+            }
+            if (item.type === PINNED_ITEM_TYPES.FOLDER) {
+                const found = this.findPinnedItemByUrl(item.children || [], url, item);
+                if (found) return found;
+            }
+        }
+
+        return null;
+    },
+
+    removePinnedItemById: function (items, itemId) {
+        const found = this.findPinnedItemById(items, itemId);
+        if (!found?.siblings) return null;
+        const [removed] = found.siblings.splice(found.index, 1);
+        return removed || null;
+    },
+
+    removePinnedItemByUrl: function (items, url) {
+        const found = this.findPinnedItemByUrl(items, url);
+        if (!found?.siblings) return null;
+        const [removed] = found.siblings.splice(found.index, 1);
+        return removed || null;
+    },
+
+    createPinnedLinkItem: function ({ id, title, url }) {
+        return {
+            id: id || this.generateUUID(),
+            type: PINNED_ITEM_TYPES.LINK,
+            title: title || 'Bookmark',
+            url: url || ''
+        };
+    },
+
+    createPinnedFolderItem: function ({ id, title, children = [] }) {
+        return {
+            id: id || this.generateUUID(),
+            type: PINNED_ITEM_TYPES.FOLDER,
+            title: title || 'Untitled',
+            children: normalizePinnedItems(children)
+        };
+    },
+
+    getPinnedItemTypeConstants: function () {
+        return { ...PINNED_ITEM_TYPES };
     },
 
     removePinnedTabState: async function (tabId) {
@@ -301,15 +413,6 @@ const Utils = {
         const settings = await this.getSettings();
         settings.autoArchiveIdleMinutes = minutes;
         await chrome.storage.sync.set({ autoArchiveIdleMinutes: minutes });
-    },
-
-    getInvertTabOrder: async function () {
-        const settings = await this.getSettings();
-        return settings.invertTabOrder;
-    },
-
-    setInvertTabOrder: async function (enabled) {
-        await chrome.storage.sync.set({ invertTabOrder: enabled });
     },
 
     // Navigate to adjacent tab within the single Arcify sidebar

@@ -46,6 +46,7 @@ let currentWindow = null;
 let showAllOpenTabsInCollapsedFolders = false; // default Arc behavior is false (active-only)
 let activeChromeTabId = null;
 const MAIN_SIDEBAR_ID = 'main';
+const { LINK: PINNED_LINK_TYPE, FOLDER: PINNED_FOLDER_TYPE } = Utils.getPinnedItemTypeConstants();
 // Arc-like behavior: track which tabs have been active in each collapsed folder.
 // These tabs stay visible until user manually opens/closes the folder.
 // WeakMap<HTMLElement (folder), Set<number (tabId)>>
@@ -65,6 +66,7 @@ function normalizeStoredState(storedState, fallbackName, fallbackColor) {
         uuid: storedState?.uuid || Utils.generateUUID(),
         name: storedState?.name || fallbackName,
         color: storedState?.color || fallbackColor,
+        pinnedItems: Array.isArray(storedState?.pinnedItems) ? storedState.pinnedItems : [],
         pinnedTabIds: Array.isArray(storedState?.pinnedTabIds) ? storedState.pinnedTabIds : [],
         temporaryTabs: Array.isArray(storedState?.temporaryTabs) ? storedState.temporaryTabs : [],
         lastTab: storedState?.lastTab ?? null
@@ -75,23 +77,64 @@ async function getBookmarkRootFolder() {
     return LocalStorage.getOrCreateArcifyFolder();
 }
 
-async function getOpenBookmarkTabIds(collectionFolder, tabs) {
-    if (!collectionFolder) {
+async function migratePinnedItemsFromBookmarksIfNeeded(storedState) {
+    if (Array.isArray(storedState?.pinnedItems) && storedState.pinnedItems.length > 0) {
+        return storedState.pinnedItems;
+    }
+
+    const bookmarkRoot = await getBookmarkRootFolder();
+    if (!bookmarkRoot) {
         return [];
     }
 
-    const bookmarks = await BookmarkUtils.getBookmarksFromFolderRecursive(collectionFolder.id);
+    async function buildItems(folderId) {
+        const children = await chrome.bookmarks.getChildren(folderId);
+        const items = [];
+        for (const child of children) {
+            if (child.url) {
+                items.push(Utils.createPinnedLinkItem({
+                    id: child.id,
+                    title: child.title,
+                    url: child.url
+                }));
+                continue;
+            }
+
+            items.push(Utils.createPinnedFolderItem({
+                id: child.id,
+                title: child.title,
+                children: await buildItems(child.id)
+            }));
+        }
+        return items;
+    }
+
+    return buildItems(bookmarkRoot.id);
+}
+
+async function getOpenPinnedTabIds(pinnedItems, tabs) {
+    if (!Array.isArray(pinnedItems) || pinnedItems.length === 0) {
+        return [];
+    }
+
     const pinnedStatesById = await Utils.getPinnedTabStates();
     const matchedTabIds = [];
+    const pinnedLinks = [];
 
-    for (const bookmark of bookmarks) {
+    Utils.walkPinnedItems(pinnedItems, (item) => {
+        if (item?.type === PINNED_LINK_TYPE) {
+            pinnedLinks.push(item);
+        }
+    });
+
+    for (const pinnedItem of pinnedLinks) {
         const matchingTab = tabs.find(tab =>
             !tab.pinned &&
             !matchedTabIds.includes(tab.id) &&
             (
-                pinnedStatesById?.[tab.id]?.bookmarkId === bookmark.id ||
-                tab.url === bookmark.url ||
-                Utils.getPinnedUrlKey(tab.url) === Utils.getPinnedUrlKey(bookmark.url)
+                pinnedStatesById?.[tab.id]?.pinnedItemId === pinnedItem.id ||
+                tab.url === pinnedItem.url ||
+                Utils.getPinnedUrlKey(tab.url) === Utils.getPinnedUrlKey(pinnedItem.url)
             )
         );
 
@@ -101,31 +144,43 @@ async function getOpenBookmarkTabIds(collectionFolder, tabs) {
 
         matchedTabIds.push(matchingTab.id);
 
-        if (bookmark.title && bookmark.title !== matchingTab.title) {
-            await Utils.setTabNameOverride(matchingTab.id, matchingTab.url, bookmark.title);
+        if (pinnedItem.title && pinnedItem.title !== matchingTab.title) {
+            await Utils.setTabNameOverride(matchingTab.id, matchingTab.url, pinnedItem.title);
         }
+
+        await Utils.setPinnedTabState(matchingTab.id, {
+            pinnedItemId: pinnedItem.id,
+            pinnedUrl: pinnedItem.url,
+            bookmarkId: pinnedStatesById?.[matchingTab.id]?.bookmarkId || null
+        });
     }
 
     return matchedTabIds;
 }
 
-async function initializeSidebarState(storedState, allTabs, bookmarkRootFolder) {
-    const name = storedState?.name || 'Home';
-    const color = storedState?.color || await Utils.getTabGroupColor(name);
+async function initializeSidebarState(storedState, allTabs) {
+    const migratedPinnedItems = await migratePinnedItemsFromBookmarksIfNeeded(storedState);
+    const effectiveStoredState = {
+        ...storedState,
+        pinnedItems: migratedPinnedItems
+    };
+    const name = effectiveStoredState?.name || 'Home';
+    const color = effectiveStoredState?.color || await Utils.getTabGroupColor(name);
 
     const currentTabs = Array.isArray(allTabs) ? allTabs : await chrome.tabs.query({ currentWindow: true });
-    const pinnedTabIds = await getOpenBookmarkTabIds(bookmarkRootFolder, currentTabs);
+    const pinnedTabIds = await getOpenPinnedTabIds(migratedPinnedItems, currentTabs);
     const temporaryTabs = currentTabs
         .filter(tab => !tab.pinned && !pinnedTabIds.includes(tab.id))
         .map(tab => tab.id);
 
-    sidebarState = normalizeStoredState(storedState, name, color);
+    sidebarState = normalizeStoredState(effectiveStoredState, name, color);
     sidebarState.id = MAIN_SIDEBAR_ID;
     sidebarState.name = name;
     sidebarState.color = color;
+    sidebarState.pinnedItems = migratedPinnedItems;
     sidebarState.pinnedTabIds = pinnedTabIds;
     sidebarState.temporaryTabs = temporaryTabs;
-    sidebarState.lastTab = storedState?.lastTab ?? currentTabs.find(tab => tab.active && !tab.pinned)?.id ?? temporaryTabs[0] ?? pinnedTabIds[0] ?? null;
+    sidebarState.lastTab = effectiveStoredState?.lastTab ?? currentTabs.find(tab => tab.active && !tab.pinned)?.id ?? temporaryTabs[0] ?? pinnedTabIds[0] ?? null;
 
     renderSidebarView(sidebarState);
     saveSidebarState();
@@ -133,28 +188,97 @@ async function initializeSidebarState(storedState, allTabs, bookmarkRootFolder) 
     await activateSidebar(false);
 }
 
+async function updatePinnedItemTitleById(itemId, newTitle) {
+    if (!sidebarState?.pinnedItems || !itemId || !newTitle) return;
+    const found = Utils.findPinnedItemById(sidebarState.pinnedItems, itemId);
+    if (!found?.item) return;
+    found.item.title = newTitle;
+    saveSidebarState();
+}
+
+async function updatePinnedItemUrlById(itemId, newUrl, newTitle = null) {
+    if (!sidebarState?.pinnedItems || !itemId || !newUrl) return;
+    const found = Utils.findPinnedItemById(sidebarState.pinnedItems, itemId);
+    if (!found?.item || found.item.type !== PINNED_LINK_TYPE) return;
+    found.item.url = newUrl;
+    if (newTitle) {
+        found.item.title = newTitle;
+    }
+    saveSidebarState();
+}
+
+function removePinnedItemById(itemId) {
+    if (!sidebarState?.pinnedItems || !itemId) return null;
+    const removed = Utils.removePinnedItemById(sidebarState.pinnedItems, itemId);
+    if (removed) saveSidebarState();
+    return removed;
+}
+
+function removePinnedItemByUrl(url) {
+    if (!sidebarState?.pinnedItems || !url) return null;
+    const removed = Utils.removePinnedItemByUrl(sidebarState.pinnedItems, url);
+    if (removed) saveSidebarState();
+    return removed;
+}
+
+async function openPinnedItemAsTab(pinnedItem, replaceElement = null) {
+    if (!currentWindow || !pinnedItem?.url) return null;
+
+    const newTab = await chrome.tabs.create({
+        url: pinnedItem.url,
+        active: true,
+        windowId: currentWindow.id
+    });
+
+    if (pinnedItem.title && newTab.title !== pinnedItem.title) {
+        await Utils.setTabNameOverride(newTab.id, pinnedItem.url, pinnedItem.title);
+    }
+
+    if (sidebarState && !sidebarState.pinnedTabIds.includes(newTab.id)) {
+        sidebarState.pinnedTabIds.push(newTab.id);
+        sidebarState.lastTab = newTab.id;
+        saveSidebarState();
+    }
+
+    await Utils.setPinnedTabState(newTab.id, {
+        pinnedItemId: pinnedItem.id,
+        pinnedUrl: pinnedItem.url
+    });
+
+    if (replaceElement) {
+        const activeTabData = {
+            id: newTab.id,
+            title: pinnedItem.title,
+            url: pinnedItem.url,
+            favIconUrl: newTab.favIconUrl,
+            sidebarName: sidebarState?.name,
+            pinnedUrl: pinnedItem.url,
+            pinnedItemId: pinnedItem.id
+        };
+        const activeTabElement = await createTabElement(activeTabData, true, false);
+        activeTabElement.classList.add('active');
+        replaceElement.replaceWith(activeTabElement);
+    }
+
+    await chrome.tabs.update(newTab.id, { active: true });
+    activateTabInDOM(newTab.id);
+    return newTab;
+}
+
 // Helper function to update bookmark for a tab
 async function updateBookmarkForTab(tab, bookmarkTitle) {
     Logger.log("updating bookmark", tab, bookmarkTitle);
-    const bookmarkRoot = await getBookmarkRootFolder();
     const pinnedState = await Utils.getPinnedTabState(tab.id);
-    if (pinnedState?.bookmarkId) {
-        try {
-            await chrome.bookmarks.update(pinnedState.bookmarkId, { title: bookmarkTitle });
-            return;
-        } catch (e) {
-            Logger.warn('[Bookmarks] Failed updating bookmark by stored bookmarkId, falling back to URL search.', e);
-        }
+    const itemId = pinnedState?.pinnedItemId;
+    if (itemId) {
+        await updatePinnedItemTitleById(itemId, bookmarkTitle);
+        return;
     }
 
-    const pinnedUrl = pinnedState?.pinnedUrl;
-    if (!pinnedUrl) return;
-    const bookmark = await BookmarkUtils.findBookmarkInFolderRecursive(bookmarkRoot.id, { url: pinnedUrl });
-    if (bookmark?.bookmark?.id) {
-        await chrome.bookmarks.update(bookmark.bookmark.id, { title: bookmarkTitle });
-        await Utils.setPinnedTabState(tab.id, { bookmarkId: bookmark.bookmark.id, pinnedUrl: pinnedUrl });
-    }
-
+    const found = sidebarState?.pinnedItems ? Utils.findPinnedItemByUrl(sidebarState.pinnedItems, pinnedState?.pinnedUrl || tab.url) : null;
+    if (!found?.item) return;
+    found.item.title = bookmarkTitle;
+    saveSidebarState();
 }
 
 async function replaceBookmarkUrlWithCurrentUrl(tab, tabElement) {
@@ -176,19 +300,17 @@ async function replaceBookmarkUrlWithCurrentUrl(tab, tabElement) {
     const newTitle = liveTab?.title || tab?.title || null;
 
     const stored = await Utils.getPinnedTabState(tab.id);
-    const bookmarkId = tabElement?.dataset?.bookmarkId || stored?.bookmarkId;
+    const pinnedItemId = tabElement?.dataset?.itemId || stored?.pinnedItemId;
     const pinnedUrl = tabElement?.dataset?.pinnedUrl || stored?.pinnedUrl;
 
-    // If we don't know the bookmarkId, try resolving by pinnedUrl within the Arcify bookmark tree.
-    let resolvedBookmarkId = bookmarkId;
-    if (!resolvedBookmarkId && pinnedUrl) {
-        const bookmarkRoot = await getBookmarkRootFolder();
-        const result = await BookmarkUtils.findBookmarkInFolderRecursive(bookmarkRoot.id, { url: pinnedUrl });
-        resolvedBookmarkId = result?.bookmark?.id || null;
+    let resolvedItemId = pinnedItemId;
+    if (!resolvedItemId && pinnedUrl) {
+        const found = sidebarState?.pinnedItems ? Utils.findPinnedItemByUrl(sidebarState.pinnedItems, pinnedUrl) : null;
+        resolvedItemId = found?.item?.id || null;
     }
 
-    if (!resolvedBookmarkId) {
-        console.warn('[Arcify] Cannot replace bookmark URL: missing bookmarkId and unable to resolve.', {
+    if (!resolvedItemId) {
+        console.warn('[Arcify] Cannot replace pinned URL: missing pinned item id and unable to resolve.', {
             tabId: tab.id,
             pinnedUrl,
             dataset: tabElement?.dataset
@@ -196,17 +318,8 @@ async function replaceBookmarkUrlWithCurrentUrl(tab, tabElement) {
         return;
     }
 
-    try {
-        const updatePayload = { url: newUrl };
-        // Keep bookmark title in sync with the new pinned page for clarity.
-        if (newTitle) updatePayload.title = newTitle;
-        await chrome.bookmarks.update(resolvedBookmarkId, updatePayload);
-    } catch (e) {
-        console.error('[Arcify] chrome.bookmarks.update failed', { bookmarkId: resolvedBookmarkId, newUrl, error: e });
-        return;
-    }
-
-    await Utils.setPinnedTabState(tab.id, { bookmarkId: resolvedBookmarkId, pinnedUrl: newUrl });
+    await updatePinnedItemUrlById(resolvedItemId, newUrl, newTitle);
+    await Utils.setPinnedTabState(tab.id, { pinnedItemId: resolvedItemId, pinnedUrl: newUrl, bookmarkId: stored?.bookmarkId || null });
     if (newTitle) {
         // Update override baseline (and pinned display) to the new URL/title.
         await Utils.setTabNameOverride(tab.id, newUrl, newTitle);
@@ -215,6 +328,7 @@ async function replaceBookmarkUrlWithCurrentUrl(tab, tabElement) {
     if (tabElement) {
         tabElement.dataset.pinnedUrl = newUrl;
         tabElement.dataset.url = newUrl;
+        tabElement.dataset.itemId = resolvedItemId;
         // Tab is now pinned to current URL; "back to pinned" should no longer be available.
         const favicon = tabElement.querySelector('.tab-favicon') || tabElement.querySelector('img');
         if (favicon) {
@@ -511,41 +625,24 @@ async function activatePinnedTabByURL(bookmarkUrl) {
             Logger.log('[PinnedTabActivator] No existing tab found, opening bookmark');
             // Find existing bookmark-only element to replace
             const existingBookmarkElement = document.querySelector(`[data-url="${bookmarkUrl}"].bookmark-only`);
-
-            // Find the bookmark to get the correct title
-            const bookmarkRoot = await getBookmarkRootFolder();
-
-            let bookmarkTitle = null;
-            if (bookmarkRoot) {
-                const bookmarks = await chrome.bookmarks.getChildren(bookmarkRoot.id);
-                const matchingBookmark = BookmarkUtils.findBookmarkByUrl(bookmarks, bookmarkUrl);
-                if (matchingBookmark) {
-                    bookmarkTitle = matchingBookmark.title;
-                }
-            }
+            const matchingPinnedItem = sidebarState?.pinnedItems
+                ? Utils.findPinnedItemByUrl(sidebarState.pinnedItems, bookmarkUrl)?.item
+                : null;
 
             // Prepare bookmark data for opening
             const bookmarkData = {
+                id: matchingPinnedItem?.id || existingBookmarkElement?.dataset?.itemId || null,
                 url: bookmarkUrl,
-                title: bookmarkTitle || 'Bookmark',
+                title: matchingPinnedItem?.title || 'Bookmark',
                 sidebarName: sidebarState?.name,
-                pinnedUrl: bookmarkUrl,
-                bookmarkId: existingBookmarkElement?.dataset?.bookmarkId || null
-            };
-
-            const context = {
-                sidebarState,
-                currentWindow,
-                saveSidebarState,
-                createTabElement,
-                activateTabInDOM,
-                Utils
+                pinnedUrl: matchingPinnedItem?.url || bookmarkUrl,
+                pinnedItemId: matchingPinnedItem?.id || existingBookmarkElement?.dataset?.itemId || null
             };
 
             // Use shared bookmark opening logic
             isOpeningBookmark = true;
             try {
-                await BookmarkUtils.openBookmarkAsTab(bookmarkData, existingBookmarkElement, context, /*isPinned=*/true);
+                await openPinnedItemAsTab(bookmarkData, existingBookmarkElement);
             } finally {
                 isOpeningBookmark = false;
             }
@@ -713,16 +810,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             applyColorOverrides();
         }
 
-        // Re-render the sidebar when tab order inversion setting changes
-        if (areaName === 'sync' && changes.invertTabOrder) {
-            Logger.log('invertTabOrder changed, refreshing sidebar UI...');
-            if (refreshSidebarUITimeout) clearTimeout(refreshSidebarUITimeout);
-            refreshSidebarUITimeout = setTimeout(() => {
-                refreshSidebarUITimeout = null;
-                refreshSidebarUI();
-            }, 50);
-        }
-
         if (areaName === 'sync' && changes.showAllOpenTabsInCollapsedFolders) {
             showAllOpenTabsInCollapsedFolders = Boolean(changes.showAllOpenTabsInCollapsedFolders.newValue);
             syncCollapsedFolders();
@@ -775,10 +862,8 @@ async function initSidebar() {
         // Check for duplicates
         await LocalStorage.mergeDuplicateBookmarkFolders();
 
-        const bookmarkRoot = await getBookmarkRootFolder();
-        Logger.log("bookmarkRoot", bookmarkRoot);
         const storedState = await Utils.getSidebarState();
-        await initializeSidebarState(storedState, allTabs, bookmarkRoot);
+        await initializeSidebarState(storedState, allTabs);
     } catch (error) {
         Logger.error('Error initializing sidebar:', error);
     }
@@ -1050,24 +1135,23 @@ async function moveTabToPinned(state, tab) {
     if (!state.pinnedTabIds.includes(tab.id)) {
         state.pinnedTabIds.push(tab.id);
     }
-    const bookmarkRoot = await getBookmarkRootFolder();
-    const bookmarks = await chrome.bookmarks.getChildren(bookmarkRoot.id);
-    const existingBookmark = BookmarkUtils.findBookmarkByUrl(bookmarks, tab.url);
-    let bookmarkIdToStore = existingBookmark?.id || null;
-    if (!existingBookmark) {
-        // delete existing bookmark
-        await BookmarkUtils.removeBookmarkByUrl(bookmarkRoot.id, tab.url);
+    if (!Array.isArray(state.pinnedItems)) {
+        state.pinnedItems = [];
+    }
 
-        const created = await chrome.bookmarks.create({
-            parentId: bookmarkRoot.id,
+    let pinnedItem = Utils.findPinnedItemByUrl(state.pinnedItems, tab.url)?.item;
+    if (!pinnedItem) {
+        pinnedItem = Utils.createPinnedLinkItem({
             title: tab.title,
             url: tab.url
         });
-        bookmarkIdToStore = created?.id || null;
+        state.pinnedItems.push(pinnedItem);
+    } else {
+        pinnedItem.title = tab.title || pinnedItem.title;
     }
 
     // Track the original pinned URL for Arc-like "Back to Pinned URL" behavior.
-    await Utils.setPinnedTabState(tab.id, { pinnedUrl: tab.url, bookmarkId: bookmarkIdToStore });
+    await Utils.setPinnedTabState(tab.id, { pinnedUrl: tab.url, pinnedItemId: pinnedItem.id });
 
     // Update chevron state after moving tab to pinned
     const sidebarView = document.querySelector('.sidebar-view');
@@ -1080,12 +1164,16 @@ async function moveTabToPinned(state, tab) {
     updatePinnedSectionPlaceholders();
 
     await reconcileTabOrdering({ source: 'arcify', movedTabId: tab.id });
-    return bookmarkIdToStore;
+    return pinnedItem.id;
 }
 
 async function moveTabToTemp(state, tab) {
-    const bookmarkRoot = await getBookmarkRootFolder();
-    await BookmarkUtils.removeBookmarkByUrl(bookmarkRoot.id, tab.url);
+    const pinnedState = await Utils.getPinnedTabState(tab.id);
+    if (pinnedState?.pinnedItemId) {
+        removePinnedItemById(pinnedState.pinnedItemId);
+    } else {
+        removePinnedItemByUrl(tab.url);
+    }
 
     state.pinnedTabIds = state.pinnedTabIds.filter(id => id !== tab.id);
     if (!state.temporaryTabs.includes(tab.id)) {
@@ -1289,23 +1377,27 @@ async function getDraggedTab(draggingElement) {
 }
 
 async function ensureFolderBookmark(folderElement, tab, draggingElement, isBookmarkOnly) {
-    const bookmarkRoot = await getBookmarkRootFolder();
-    if (!bookmarkRoot) return;
+    if (!sidebarState?.pinnedItems) return null;
 
-    const folderName = folderElement.querySelector('.folder-name').value;
-    const existingFolders = await chrome.bookmarks.getChildren(bookmarkRoot.id);
-    let folder = existingFolders.find(f => f.title === folderName);
-    if (!folder) {
-        folder = await chrome.bookmarks.create({
-            parentId: bookmarkRoot.id,
-            title: folderName
-        });
+    const folderId = folderElement.dataset.itemId;
+    const folderMatch = Utils.findPinnedItemById(sidebarState.pinnedItems, folderId);
+    const folder = folderMatch?.item;
+    if (!folder || folder.type !== PINNED_FOLDER_TYPE) return null;
+
+    let pinnedItemId = draggingElement?.dataset?.itemId || null;
+    let pinnedItem = pinnedItemId ? Utils.findPinnedItemById(sidebarState.pinnedItems, pinnedItemId)?.item : null;
+    if (!pinnedItem) {
+        const foundByUrl = Utils.findPinnedItemByUrl(sidebarState.pinnedItems, tab.url);
+        pinnedItem = foundByUrl?.item || null;
+        pinnedItemId = pinnedItem?.id || null;
     }
-
-    const existingBookmarks = await chrome.bookmarks.getChildren(folder.id);
-    const existingBookmark = BookmarkUtils.findBookmarkByUrl(existingBookmarks, tab.url);
-    const bookmarkAlreadyInTarget = Boolean(existingBookmark);
-    let bookmarkId = existingBookmark?.id || null;
+    if (!pinnedItem) {
+        pinnedItem = Utils.createPinnedLinkItem({
+            title: tab.title,
+            url: tab.url
+        });
+        pinnedItemId = pinnedItem.id;
+    }
 
     const targetFolderContentEl = folderElement.querySelector('.folder-content');
     if (targetFolderContentEl && !isBookmarkOnly && tab?.url) {
@@ -1316,25 +1408,20 @@ async function ensureFolderBookmark(folderElement, tab, draggingElement, isBookm
         }
     }
 
-    if (!bookmarkAlreadyInTarget) {
-        await BookmarkUtils.removeBookmarkByUrl(bookmarkRoot.id, tab.url);
-        const createdBookmark = await chrome.bookmarks.create({
-            parentId: folder.id,
-            title: tab.title,
-            url: tab.url
-        });
-        bookmarkId = createdBookmark?.id || null;
+    Utils.removePinnedItemById(sidebarState.pinnedItems, pinnedItemId);
+    if (!Array.isArray(folder.children)) {
+        folder.children = [];
     }
+    folder.children.push(pinnedItem);
 
-    folderElement.dataset.bookmarkId = folder.id;
     updateFolderPlaceholder(folderElement);
-    return { folderId: folder.id, bookmarkId };
+    return { folderId: folder.id, pinnedItemId };
 }
 
 async function pinDroppedLiveTab(state, tab) {
-    const bookmarkId = await moveTabToPinned(state, tab);
+    const pinnedItemId = await moveTabToPinned(state, tab);
     saveSidebarState();
-    return bookmarkId;
+    return pinnedItemId;
 }
 
 async function movePinnedItemToFolder(tab, targetFolderElement, draggingElement, isBookmarkOnly) {
@@ -1343,9 +1430,9 @@ async function movePinnedItemToFolder(tab, targetFolderElement, draggingElement,
     return result;
 }
 
-async function attachBookmarkMetadataToTabElement(draggingElement, tab, bookmarkId, pinnedUrl = null) {
-    if (draggingElement && bookmarkId) {
-        draggingElement.dataset.bookmarkId = bookmarkId;
+async function attachPinnedItemMetadataToTabElement(draggingElement, tab, pinnedItemId, pinnedUrl = null) {
+    if (draggingElement && pinnedItemId) {
+        draggingElement.dataset.itemId = pinnedItemId;
     }
     if (draggingElement && pinnedUrl) {
         draggingElement.dataset.pinnedUrl = pinnedUrl;
@@ -1353,9 +1440,9 @@ async function attachBookmarkMetadataToTabElement(draggingElement, tab, bookmark
     if (draggingElement && tab?.url) {
         draggingElement.dataset.url = tab.url;
     }
-    if (tab?.id && bookmarkId) {
+    if (tab?.id && pinnedItemId) {
         await Utils.setPinnedTabState(tab.id, {
-            bookmarkId,
+            pinnedItemId,
             pinnedUrl: pinnedUrl || tab.url
         });
     }
@@ -1369,112 +1456,6 @@ async function convertFavoriteDrop(draggingElement, targetIsPinned) {
     return convertFavoriteToTab(draggingElement, targetIsPinned);
 }
 
-async function resolveBookmarkIdForTabElement(tabElement, bookmarkRootId) {
-    if (!tabElement) return null;
-
-    if (tabElement.dataset.bookmarkId) {
-        return tabElement.dataset.bookmarkId;
-    }
-
-    const tabId = tabElement.dataset.tabId ? parseInt(tabElement.dataset.tabId) : null;
-    if (tabId) {
-        const stored = await Utils.getPinnedTabState(tabId);
-        if (stored?.bookmarkId) {
-            tabElement.dataset.bookmarkId = stored.bookmarkId;
-            if (stored.pinnedUrl) tabElement.dataset.pinnedUrl = stored.pinnedUrl;
-            return stored.bookmarkId;
-        }
-    }
-
-    const lookupUrl = tabElement.dataset.pinnedUrl || tabElement.dataset.url;
-    if (!lookupUrl) return null;
-
-    const result = await BookmarkUtils.findBookmarkInFolderRecursive(bookmarkRootId, { url: lookupUrl });
-    const bookmarkId = result?.bookmark?.id || null;
-    if (bookmarkId) {
-        tabElement.dataset.bookmarkId = bookmarkId;
-    }
-    return bookmarkId;
-}
-
-async function resolveFolderBookmarkId(folderElement, bookmarkRootId) {
-    if (!folderElement) return null;
-
-    if (folderElement.dataset.bookmarkId) {
-        return folderElement.dataset.bookmarkId;
-    }
-
-    const folderName = folderElement.querySelector('.folder-name')?.value?.trim();
-    if (!folderName) return null;
-
-    const rootChildren = await chrome.bookmarks.getChildren(bookmarkRootId);
-    const folder = rootChildren.find(item => !item.url && item.title === folderName);
-    if (!folder?.id) return null;
-
-    folderElement.dataset.bookmarkId = folder.id;
-    return folder.id;
-}
-
-async function syncFolderBookmarkOrderFromDom(folderContent, parentBookmarkId, bookmarkRootId) {
-    const folderChildren = Array.from(folderContent.children)
-        .filter(child => child.classList?.contains('tab') && !child.classList.contains('tab-placeholder'));
-
-    let index = 0;
-    for (const child of folderChildren) {
-        const bookmarkId = await resolveBookmarkIdForTabElement(child, bookmarkRootId);
-        if (!bookmarkId) continue;
-
-        await chrome.bookmarks.move(bookmarkId, {
-            parentId: parentBookmarkId,
-            index
-        });
-        index += 1;
-    }
-}
-
-async function syncPinnedBookmarksFromDom(sidebarView) {
-    const pinnedContainer = getPinnedContainer(sidebarView);
-    if (!pinnedContainer) return;
-
-    const bookmarkRoot = await getBookmarkRootFolder();
-    if (!bookmarkRoot?.id) return;
-
-    const rootChildren = Array.from(pinnedContainer.children)
-        .filter(child =>
-            (child.classList?.contains('tab') && !child.classList.contains('tab-placeholder')) ||
-            child.classList?.contains('folder')
-        );
-
-    let rootIndex = 0;
-    for (const child of rootChildren) {
-        if (child.classList.contains('folder')) {
-            const folderBookmarkId = await resolveFolderBookmarkId(child, bookmarkRoot.id);
-            if (!folderBookmarkId) continue;
-
-            await chrome.bookmarks.move(folderBookmarkId, {
-                parentId: bookmarkRoot.id,
-                index: rootIndex
-            });
-            rootIndex += 1;
-
-            const folderContent = child.querySelector('.folder-content');
-            if (folderContent) {
-                await syncFolderBookmarkOrderFromDom(folderContent, folderBookmarkId, bookmarkRoot.id);
-            }
-            continue;
-        }
-
-        const bookmarkId = await resolveBookmarkIdForTabElement(child, bookmarkRoot.id);
-        if (!bookmarkId) continue;
-
-        await chrome.bookmarks.move(bookmarkId, {
-            parentId: bookmarkRoot.id,
-            index: rootIndex
-        });
-        rootIndex += 1;
-    }
-}
-
 // Apply bookmark/state mutations after the drop handler has already positioned the DOM.
 async function handleBookmarkOperations(draggingElement, container, targetFolder) {
     if (!draggingElement || !container) {
@@ -1482,14 +1463,11 @@ async function handleBookmarkOperations(draggingElement, container, targetFolder
         return;
     }
 
-    let shouldSyncPinnedBookmarks = false;
-
     try {
         if (container.dataset.tabType === 'pinned' && (draggingElement.dataset.tabId || draggingElement.dataset.url)) {
-            shouldSyncPinnedBookmarks = true;
             if (draggingElement.classList.contains('pinned-favicon')) {
                 await convertFavoriteDrop(draggingElement, true);
-                return shouldSyncPinnedBookmarks;
+                return false;
             }
 
             const state = sidebarState;
@@ -1501,13 +1479,13 @@ async function handleBookmarkOperations(draggingElement, container, targetFolder
             const { tab, tabId, isBookmarkOnly } = await getDraggedTab(draggingElement);
             if (!tab) {
                 Logger.error(`Tab not found for ID: ${tabId}`);
-                return shouldSyncPinnedBookmarks;
+                return false;
             }
 
             const targetFolderElement = targetFolder ? targetFolder.closest('.folder') : null;
             if (targetFolderElement) {
-                const { bookmarkId } = await movePinnedItemToFolder(tab, targetFolderElement, draggingElement, isBookmarkOnly);
-                await attachBookmarkMetadataToTabElement(draggingElement, tab, bookmarkId, tab.url);
+                const { pinnedItemId } = await movePinnedItemToFolder(tab, targetFolderElement, draggingElement, isBookmarkOnly);
+                await attachPinnedItemMetadataToTabElement(draggingElement, tab, pinnedItemId, tab.url);
                 if (!isBookmarkOnly && tabId) {
                     state.temporaryTabs = state.temporaryTabs.filter(id => id !== tabId);
                     if (!state.pinnedTabIds.includes(tabId)) {
@@ -1515,14 +1493,14 @@ async function handleBookmarkOperations(draggingElement, container, targetFolder
                     }
                     saveSidebarState();
                 }
-                return shouldSyncPinnedBookmarks;
+                return false;
             }
 
             if (!isBookmarkOnly) {
-                const bookmarkId = await pinDroppedLiveTab(state, tab);
-                await attachBookmarkMetadataToTabElement(draggingElement, tab, bookmarkId, tab.url);
+                const pinnedItemId = await pinDroppedLiveTab(state, tab);
+                await attachPinnedItemMetadataToTabElement(draggingElement, tab, pinnedItemId, tab.url);
             }
-            return shouldSyncPinnedBookmarks;
+            return false;
         }
 
         if (container.dataset.tabType === 'temporary' && draggingElement.dataset.tabId) {
@@ -1532,7 +1510,7 @@ async function handleBookmarkOperations(draggingElement, container, targetFolder
                 if (state) {
                     await moveTabToTemporary(state, tab);
                 }
-                return shouldSyncPinnedBookmarks;
+                return false;
             }
 
             const tabId = parseInt(draggingElement.dataset.tabId);
@@ -1541,7 +1519,7 @@ async function handleBookmarkOperations(draggingElement, container, targetFolder
             if (state && tab) {
                 await moveTabToTemporary(state, tab);
             }
-            return shouldSyncPinnedBookmarks;
+            return false;
         }
 
         if (draggingElement.classList.contains('pinned-favicon') && draggingElement.dataset.tabId) {
@@ -1554,7 +1532,7 @@ async function handleBookmarkOperations(draggingElement, container, targetFolder
         updatePinnedSectionPlaceholders();
     }
 
-    return shouldSyncPinnedBookmarks;
+    return false;
 }
 
 /**
@@ -1603,6 +1581,58 @@ function getFlattenedPinnedSectionTabIds(collectionElement) {
     return uniqPreserveOrder(out);
 }
 
+function clonePinnedItem(item) {
+    if (!item) return null;
+    if (item.type === PINNED_FOLDER_TYPE) {
+        return {
+            ...item,
+            children: Array.isArray(item.children) ? item.children.map(clonePinnedItem).filter(Boolean) : []
+        };
+    }
+    return { ...item };
+}
+
+function buildPinnedItemsFromDomContainer(container, sourceItems) {
+    const children = Array.from(container.children)
+        .filter(child =>
+            (child.classList?.contains('tab') && !child.classList.contains('tab-placeholder')) ||
+            child.classList?.contains('folder')
+        );
+
+    const items = [];
+    for (const child of children) {
+        if (child.classList.contains('folder')) {
+            const itemId = child.dataset.itemId;
+            const found = itemId ? Utils.findPinnedItemById(sourceItems, itemId) : null;
+            if (!found?.item || found.item.type !== PINNED_FOLDER_TYPE) continue;
+            const clonedFolder = clonePinnedItem(found.item);
+            const folderContent = child.querySelector('.folder-content');
+            clonedFolder.children = folderContent ? buildPinnedItemsFromDomContainer(folderContent, sourceItems) : [];
+            items.push(clonedFolder);
+            continue;
+        }
+
+        const itemId = child.dataset.itemId;
+        let found = itemId ? Utils.findPinnedItemById(sourceItems, itemId) : null;
+        if (!found?.item && child.dataset.url) {
+            found = Utils.findPinnedItemByUrl(sourceItems, child.dataset.url);
+        }
+        if (!found?.item || found.item.type !== PINNED_LINK_TYPE) continue;
+        items.push(clonePinnedItem(found.item));
+    }
+
+    return items;
+}
+
+function syncPinnedItemsStateFromDom(sidebarView) {
+    if (!sidebarState?.pinnedItems || !sidebarView) return;
+    const pinnedContainer = getPinnedContainer(sidebarView);
+    if (!pinnedContainer) return;
+
+    sidebarState.pinnedItems = buildPinnedItemsFromDomContainer(pinnedContainer, sidebarState.pinnedItems);
+    saveSidebarState();
+}
+
 function getTempSectionTabIds(collectionElement) {
     const tempContainer = getTempContainer(collectionElement);
     if (!tempContainer) return [];
@@ -1625,17 +1655,15 @@ async function handleArcifyOrderChangeAfterDropByTabId(tabId, container) {
     if (!sidebarView || !sidebarState) return;
 
     const tabType = container.dataset.tabType;
-    const invertTabOrder = await Utils.getInvertTabOrder();
     if (tabType === 'temporary') {
         const tempIdsDisplayOrder = getTempSectionTabIds(sidebarView);
-        const tempIdsChromeOrder = invertTabOrder ? [...tempIdsDisplayOrder].reverse() : tempIdsDisplayOrder;
-        const existing = (sidebarState.temporaryTabs ?? []).filter(id => !tempIdsChromeOrder.includes(id));
-        sidebarState.temporaryTabs = uniqPreserveOrder([...tempIdsChromeOrder, ...existing]);
+        const existing = (sidebarState.temporaryTabs ?? []).filter(id => !tempIdsDisplayOrder.includes(id));
+        sidebarState.temporaryTabs = uniqPreserveOrder([...tempIdsDisplayOrder, ...existing]);
     } else if (tabType === 'pinned') {
+        syncPinnedItemsStateFromDom(sidebarView);
         const pinnedIdsDisplayOrder = getFlattenedPinnedSectionTabIds(sidebarView);
-        const pinnedIdsChromeOrder = invertTabOrder ? [...pinnedIdsDisplayOrder].reverse() : pinnedIdsDisplayOrder;
-        const existing = (sidebarState.pinnedTabIds ?? []).filter(id => !pinnedIdsChromeOrder.includes(id));
-        sidebarState.pinnedTabIds = uniqPreserveOrder([...pinnedIdsChromeOrder, ...existing]);
+        const existing = (sidebarState.pinnedTabIds ?? []).filter(id => !pinnedIdsDisplayOrder.includes(id));
+        sidebarState.pinnedTabIds = uniqPreserveOrder([...pinnedIdsDisplayOrder, ...existing]);
     } else {
         return;
     }
@@ -1764,7 +1792,7 @@ async function setupDragAndDrop(pinnedContainer, tempContainer) {
                 }
 
                 // Handle bookmark operations after DOM positioning is complete
-                const shouldSyncPinnedBookmarks = await handleBookmarkOperations(draggingElement, container, targetFolder);
+                await handleBookmarkOperations(draggingElement, container, targetFolder);
 
                 // Resync collapsed-folder projections/icons after move (source + destination)
                 if (dragSourceFolderElement) {
@@ -1774,14 +1802,10 @@ async function setupDragAndDrop(pinnedContainer, tempContainer) {
                     syncCollapsedFolderTabs(targetFolderElement);
                 }
 
-                if (shouldSyncPinnedBookmarks) {
-                    try {
-                        const sidebarView = container.closest('.sidebar-view') || document.querySelector('.sidebar-view');
-                        if (sidebarView) {
-                            await syncPinnedBookmarksFromDom(sidebarView);
-                        }
-                    } catch (error) {
-                        Logger.error('Error syncing pinned bookmarks from DOM:', error);
+                if (container.dataset.tabType === 'pinned') {
+                    const sidebarView = container.closest('.sidebar-view') || document.querySelector('.sidebar-view');
+                    if (sidebarView) {
+                        syncPinnedItemsStateFromDom(sidebarView);
                     }
                 }
 
@@ -1879,6 +1903,9 @@ async function createNewFolder(sidebarView) {
     folderContent.classList.toggle('collapsed');
     folderToggle.classList.toggle('collapsed');
 
+    const folderItem = Utils.createPinnedFolderItem({ title: 'Untitled', children: [] });
+    folderElement.dataset.itemId = folderItem.id;
+
     // Set up initial display for new folder
     folderNameInput.style.display = 'inline-block';
     folderTitle.style.display = 'none';
@@ -1895,18 +1922,11 @@ async function createNewFolder(sidebarView) {
 
     // Set up folder name input
     folderNameInput.addEventListener('change', async () => {
-        const bookmarkRoot = await getBookmarkRootFolder();
-        const existingFolders = await chrome.bookmarks.getChildren(bookmarkRoot.id);
-        const folder = existingFolders.find(f => f.title === folderNameInput.value);
-        if (!folder) {
-            await chrome.bookmarks.create({
-                parentId: bookmarkRoot.id,
-                title: folderNameInput.value
-            });
-            folderNameInput.style.display = 'none';
-            folderTitle.innerHTML = folderNameInput.value;
-            folderTitle.style.display = 'inline';
-        }
+        folderItem.title = folderNameInput.value || 'Untitled';
+        saveSidebarState();
+        folderNameInput.style.display = 'none';
+        folderTitle.innerHTML = folderItem.title;
+        folderTitle.style.display = 'inline';
     });
 
     // Add double-click functionality for folder name editing (for new folders)
@@ -1926,23 +1946,13 @@ async function createNewFolder(sidebarView) {
         if (save) {
             const newName = folderNameInput.value.trim();
             if (newName) {
-                const bookmarkRoot = await getBookmarkRootFolder();
-                const existingFolders = await chrome.bookmarks.getChildren(bookmarkRoot.id);
-                const folder = existingFolders.find(f => f.title === newName);
-                if (!folder) {
-                    const createdFolder = await chrome.bookmarks.create({
-                        parentId: bookmarkRoot.id,
-                        title: newName
-                    });
-                    folderElement.dataset.bookmarkId = createdFolder.id;
-                } else {
-                    folderElement.dataset.bookmarkId = folder.id;
-                }
+                folderItem.title = newName;
+                saveSidebarState();
             }
         }
         // Update display regardless of save/cancel
         folderNameInput.style.display = 'none';
-        folderTitle.innerHTML = folderNameInput.value || 'Untitled';
+        folderTitle.innerHTML = folderItem.title;
         folderTitle.style.display = 'inline';
     };
 
@@ -1960,6 +1970,11 @@ async function createNewFolder(sidebarView) {
 
     // Add the new folder to the pinned container
     pinnedContainer.appendChild(folderElement);
+    if (!Array.isArray(sidebarState.pinnedItems)) {
+        sidebarState.pinnedItems = [];
+    }
+    sidebarState.pinnedItems.push(folderItem);
+    saveSidebarState();
 
     // Set up context menu for the new folder
     setupFolderContextMenu(folderElement, { name: sidebarView.querySelector('.sidebar-name').value });
@@ -1972,181 +1987,143 @@ async function createNewFolder(sidebarView) {
 
 async function loadTabs(state, pinnedContainer, tempContainer) {
     Logger.log('Loading tabs for sidebar:', state.id);
-    Logger.log('Pinned bookmarks in sidebar:', state.pinnedTabIds);
+    Logger.log('Pinned items in sidebar:', state.pinnedItems);
 
     // Track which *tabIds* are already represented in the pinned bookmarks UI so we don't double-render them
     // in the temporary section. We intentionally avoid URL-key based exclusion here because multiple open
     // tabs can share the same base URL (e.g. abc.com?x=y and abc.com?x=z).
     const representedPinnedTabIds = new Set();
     try {
-        const invertTabOrder = await Utils.getInvertTabOrder();
         const tabs = await chrome.tabs.query({ currentWindow: true });
         const pinnedStatesById = await Utils.getPinnedTabStates();
         const pinnedTabs = await chrome.tabs.query({ pinned: true, currentWindow: true });
         const pinnedUrls = new Set(pinnedTabs.map(tab => tab.url));
+        const processedUrls = new Set();
 
-        const collectionFolder = await getBookmarkRootFolder();
+        async function processPinnedItems(items, container) {
+            const itemsToRender = items;
 
-        if (collectionFolder) {
-            // Recursive function to process bookmarks and folders
-            async function processBookmarkNode(node, container) {
-                const bookmarks = await chrome.bookmarks.getChildren(node.id);
-                Logger.log('Processing bookmarks:', bookmarks);
-                const processedUrls = new Set();
+            for (const item of itemsToRender) {
+                if (item.type === PINNED_FOLDER_TYPE) {
+                    const folderTemplate = document.getElementById('folderTemplate');
+                    const newFolder = folderTemplate.content.cloneNode(true);
+                    const folderElement = newFolder.querySelector('.folder');
+                    const folderHeader = folderElement.querySelector('.folder-header');
+                    const folderTitle = folderElement.querySelector('.folder-title');
+                    const folderNameInput = folderElement.querySelector('.folder-name');
+                    const folderContent = folderElement.querySelector('.folder-content');
+                    const folderToggle = folderElement.querySelector('.folder-toggle');
+                    folderElement.dataset.itemId = item.id;
 
-                const itemsToRender = invertTabOrder ? [...bookmarks].reverse() : bookmarks;
-                for (const item of itemsToRender) {
-                    if (!item.url) {
-                        // This is a folder
-                        const folderTemplate = document.getElementById('folderTemplate');
-                        const newFolder = folderTemplate.content.cloneNode(true);
-                        const folderElement = newFolder.querySelector('.folder');
-                        const folderHeader = folderElement.querySelector('.folder-header');
-                        const folderIcon = folderElement.querySelector('.folder-icon');
-                        const folderTitle = folderElement.querySelector('.folder-title');
-                        const folderNameInput = folderElement.querySelector('.folder-name');
-                        const folderContent = folderElement.querySelector('.folder-content');
-                        const folderToggle = folderElement.querySelector('.folder-toggle');
-                        const placeHolderElement = folderElement.querySelector('.tab-placeholder');
-                        folderElement.dataset.bookmarkId = item.id;
-                        // Set up folder toggle functionality
-                        // Add context menu for folder
-                        setupFolderContextMenu(folderElement, state, item);
+                    setupFolderContextMenu(folderElement, state, item);
 
-                        folderHeader.addEventListener('click', () => {
-                            // Clear the tracked shown tabs when user manually toggles the folder (Arc behavior).
-                            collapsedFolderShownTabs.delete(folderElement);
-                            folderElement.classList.toggle('collapsed');
-                            folderContent.classList.toggle('collapsed');
-                            folderToggle.classList.toggle('collapsed');
-                            updateFolderIcon(folderElement);
-                            updateFolderIcon(folderElement);
-                            syncCollapsedFolderTabs(folderElement);
-                        });
+                    folderHeader.addEventListener('click', () => {
+                        collapsedFolderShownTabs.delete(folderElement);
+                        folderElement.classList.toggle('collapsed');
+                        folderContent.classList.toggle('collapsed');
+                        folderToggle.classList.toggle('collapsed');
+                        updateFolderIcon(folderElement);
+                        syncCollapsedFolderTabs(folderElement);
+                    });
 
-                        // Add double-click functionality for folder name editing
-                        folderHeader.addEventListener('dblclick', (e) => {
-                            // Prevent dblclick on folder toggle button from triggering rename
-                            if (e.target === folderToggle) return;
+                    folderHeader.addEventListener('dblclick', (e) => {
+                        if (e.target === folderToggle) return;
+                        folderTitle.style.display = 'none';
+                        folderNameInput.style.display = 'inline-block';
+                        folderNameInput.readOnly = false;
+                        folderNameInput.disabled = false;
+                        folderNameInput.select();
+                        folderNameInput.focus();
+                    });
 
-                            folderTitle.style.display = 'none';
-                            folderNameInput.style.display = 'inline-block';
-                            folderNameInput.readOnly = false;
-                            folderNameInput.disabled = false;
-                            folderNameInput.select();
-                            folderNameInput.focus();
-                        });
-
-                        const saveOrCancelFolderEdit = async (save) => {
-                            if (save) {
-                                const newName = folderNameInput.value.trim();
-                                if (newName && newName !== item.title) {
-                                    try {
-                                        await chrome.bookmarks.update(item.id, { title: newName });
-                                        item.title = newName; // Update local item object
-                                    } catch (error) {
-                                        Logger.error("Error updating folder name:", error);
-                                    }
-                                }
+                    const saveOrCancelFolderEdit = async (save) => {
+                        if (save) {
+                            const newName = folderNameInput.value.trim();
+                            if (newName && newName !== item.title) {
+                                item.title = newName;
+                                saveSidebarState();
                             }
-                            // Update display regardless of save/cancel
-                            folderNameInput.value = item.title;
-                            folderNameInput.readOnly = true;
-                            folderNameInput.disabled = true;
-                            folderNameInput.style.display = 'none';
-                            folderTitle.innerHTML = item.title;
-                            folderTitle.style.display = 'inline';
-                        };
-
-                        folderNameInput.addEventListener('blur', () => saveOrCancelFolderEdit(true));
-                        folderNameInput.addEventListener('keydown', async (e) => {
-                            if (e.key === 'Enter') {
-                                e.preventDefault();
-                                await saveOrCancelFolderEdit(true);
-                                folderNameInput.blur();
-                            } else if (e.key === 'Escape') {
-                                await saveOrCancelFolderEdit(false);
-                                folderNameInput.blur();
-                            }
-                        });
-
+                        }
                         folderNameInput.value = item.title;
                         folderNameInput.readOnly = true;
                         folderNameInput.disabled = true;
                         folderNameInput.style.display = 'none';
                         folderTitle.innerHTML = item.title;
                         folderTitle.style.display = 'inline';
+                    };
 
-                        container.appendChild(folderElement);
-
-                        // Recursively process the folder's contents
-                        await processBookmarkNode(item, folderElement.querySelector('.folder-content'));
-
-                        // Update folder placeholder state after loading contents
-                        updateFolderPlaceholder(folderElement);
-                        // Initial sync for collapsed folders (template starts collapsed).
-                        syncCollapsedFolderTabs(folderElement);
-                    } else {
-                        // This is a bookmark
-                        if (!processedUrls.has(item.url) && !pinnedUrls.has(item.url)) {
-                            // Choose ONE open tab (if any) to represent this bookmark:
-                            // 1) Strongest: pinned state points to this bookmarkId
-                            // 2) Exact URL match
-                            // 3) Base URL match (origin+pathname), but only if not already used for another bookmark
-                            const byBookmarkId = tabs.find(t => pinnedStatesById?.[t.id]?.bookmarkId === item.id);
-                            const byExactUrl = BookmarkUtils.findTabByUrl(tabs, item.url);
-                            const byBaseUrl = tabs.find(t =>
-                                t?.id &&
-                                !representedPinnedTabIds.has(t.id) &&
-                                Utils.getPinnedUrlKey(t.url) === Utils.getPinnedUrlKey(item.url)
-                            );
-                            const existingTab = byBookmarkId || byExactUrl || byBaseUrl;
-                            if (existingTab) {
-                                Logger.log('Creating UI element for active bookmark:', existingTab);
-                                representedPinnedTabIds.add(existingTab.id);
-                                existingTab.pinnedUrl = item.url;
-                                existingTab.bookmarkId = item.id;
-                                const tabElement = await createTabElement(existingTab, true);
-                                Logger.log('Appending tab element to container:', tabElement);
-                                container.appendChild(tabElement);
-                            } else {
-                                // Create UI element for inactive bookmark
-                                const bookmarkTab = {
-                                    id: null,
-                                    title: item.title,
-                                    url: item.url,
-                                    favIconUrl: null,
-                                    sidebarName: state.name,
-                                    pinnedUrl: item.url,
-                                    bookmarkId: item.id
-                                };
-                                Logger.log('Creating UI element for inactive bookmark:', item);
-                                const tabElement = await createTabElement(bookmarkTab, true, true);
-                                container.appendChild(tabElement);
-                            }
-                            processedUrls.add(item.url);
-                            // Update placeholder state for folder if this container is inside a folder
-                            const parentFolder = container.closest('.folder');
-                            if (parentFolder) {
-                                updateFolderPlaceholder(parentFolder);
-                            }
+                    folderNameInput.addEventListener('blur', () => saveOrCancelFolderEdit(true));
+                    folderNameInput.addEventListener('keydown', async (e) => {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            await saveOrCancelFolderEdit(true);
+                            folderNameInput.blur();
+                        } else if (e.key === 'Escape') {
+                            await saveOrCancelFolderEdit(false);
+                            folderNameInput.blur();
                         }
-                    }
-                }
-                return;
-            }
+                    });
 
-            // Process the Arcify bookmark tree and get all bookmarked URLs
-            await processBookmarkNode(collectionFolder, pinnedContainer);
+                    folderNameInput.value = item.title;
+                    folderNameInput.readOnly = true;
+                    folderNameInput.disabled = true;
+                    folderNameInput.style.display = 'none';
+                    folderTitle.innerHTML = item.title;
+                    folderTitle.style.display = 'inline';
+
+                    container.appendChild(folderElement);
+                    await processPinnedItems(item.children || [], folderContent);
+                    updateFolderPlaceholder(folderElement);
+                    syncCollapsedFolderTabs(folderElement);
+                    continue;
+                }
+
+                if (processedUrls.has(item.url) || pinnedUrls.has(item.url)) {
+                    continue;
+                }
+
+                const byItemId = tabs.find(t => pinnedStatesById?.[t.id]?.pinnedItemId === item.id);
+                const byExactUrl = BookmarkUtils.findTabByUrl(tabs, item.url);
+                const byBaseUrl = tabs.find(t =>
+                    t?.id &&
+                    !representedPinnedTabIds.has(t.id) &&
+                    Utils.getPinnedUrlKey(t.url) === Utils.getPinnedUrlKey(item.url)
+                );
+                const existingTab = byItemId || byExactUrl || byBaseUrl;
+
+                if (existingTab) {
+                    representedPinnedTabIds.add(existingTab.id);
+                    existingTab.pinnedUrl = item.url;
+                    existingTab.pinnedItemId = item.id;
+                    const tabElement = await createTabElement(existingTab, true);
+                    container.appendChild(tabElement);
+                } else {
+                    const bookmarkTab = {
+                        id: null,
+                        title: item.title,
+                        url: item.url,
+                        favIconUrl: null,
+                        sidebarName: state.name,
+                        pinnedUrl: item.url,
+                        pinnedItemId: item.id
+                    };
+                    const tabElement = await createTabElement(bookmarkTab, true, true);
+                    container.appendChild(tabElement);
+                }
+
+                processedUrls.add(item.url);
+                const parentFolder = container.closest('.folder');
+                if (parentFolder) {
+                    updateFolderPlaceholder(parentFolder);
+                }
+            }
         }
+
+        await processPinnedItems(state.pinnedItems || [], pinnedContainer);
 
 
         // Load temporary tabs
         let tabsToLoad = [...state.temporaryTabs];
-
-        if (invertTabOrder) {
-            tabsToLoad.reverse();
-        }
 
         tabsToLoad.forEach(async tabId => {
             Logger.log("checking", tabId, sidebarState);
@@ -2164,7 +2141,7 @@ async function loadTabs(state, pinnedContainer, tempContainer) {
     }
 }
 
-// Debounced UI refresh when settings change (e.g., invertTabOrder)
+// Debounced UI refresh when settings change
 let refreshSidebarUITimeout = null;
 
 async function refreshSidebarUI() {
@@ -2224,13 +2201,13 @@ async function closeTab(tabElement, tab, isPinned = false, isBookmarkOnly = fals
     Logger.log('Closing tab:', tab, tabElement, isPinned, isBookmarkOnly);
 
     if (isBookmarkOnly) {
-        // Remove from bookmarks
-        const bookmarkRoot = await getBookmarkRootFolder();
-        await BookmarkUtils.removeBookmarkByUrl(bookmarkRoot.id, tab.url, {
-            removeTabElement: true,
-            tabElement: tabElement,
-            logRemoval: true
-        });
+        const itemId = tabElement?.dataset?.itemId || null;
+        if (itemId) {
+            removePinnedItemById(itemId);
+        } else if (tab?.url) {
+            removePinnedItemByUrl(tab.url);
+        }
+        tabElement?.remove();
 
         // Update folder placeholders after removing bookmark
         updatePinnedSectionPlaceholders();
@@ -2248,13 +2225,18 @@ async function closeTab(tabElement, tab, isPinned = false, isBookmarkOnly = fals
         const overrides = await Utils.getTabNameOverrides();
         const override = overrides[tab.id];
         const displayTitle = override ? override.name : tab.title;
+        const pinnedState = await Utils.getPinnedTabState(tab.id);
+        const pinnedItemId = tabElement?.dataset?.itemId || pinnedState?.pinnedItemId || null;
+        const pinnedUrl = tabElement?.dataset?.pinnedUrl || pinnedState?.pinnedUrl || tab.url;
 
         const bookmarkTab = {
             id: null,
             title: displayTitle,
             url: tab.url,
             favIconUrl: tab.favIconUrl,
-            sidebarName: tab.sidebarName
+            sidebarName: tab.sidebarName,
+            pinnedUrl,
+            pinnedItemId
         };
         const parentFolder = tabElement.closest('.folder');
         const inactiveTabElement = await createTabElement(bookmarkTab, true, true);
@@ -2297,10 +2279,12 @@ async function createTabElement(tab, isPinned = false, isBookmarkOnly = false) {
         tabElement.classList.add('inactive', 'bookmark-only');
         tabElement.dataset.url = tab.url;
         if (tab.pinnedUrl) tabElement.dataset.pinnedUrl = tab.pinnedUrl;
+        if (tab.pinnedItemId) tabElement.dataset.itemId = tab.pinnedItemId;
         if (tab.bookmarkId) tabElement.dataset.bookmarkId = tab.bookmarkId;
     } else {
         tabElement.dataset.tabId = tab.id;
         tabElement.dataset.url = tab.url;
+        if (tab.pinnedItemId) tabElement.dataset.itemId = tab.pinnedItemId;
         if (tab.active) {
             tabElement.classList.add('active');
         }
@@ -2329,9 +2313,11 @@ async function createTabElement(tab, isPinned = false, isBookmarkOnly = false) {
         const stored = await Utils.getPinnedTabState(tab.id);
         pinnedUrlForTab = tab.pinnedUrl || stored?.pinnedUrl || tab.url;
         const bookmarkIdForTab = tab.bookmarkId || stored?.bookmarkId || null;
+        const pinnedItemIdForTab = tab.pinnedItemId || stored?.pinnedItemId || null;
         tabElement.dataset.pinnedUrl = pinnedUrlForTab;
+        if (pinnedItemIdForTab) tabElement.dataset.itemId = pinnedItemIdForTab;
         if (bookmarkIdForTab) tabElement.dataset.bookmarkId = bookmarkIdForTab;
-        await Utils.setPinnedTabState(tab.id, { pinnedUrl: pinnedUrlForTab, bookmarkId: bookmarkIdForTab });
+        await Utils.setPinnedTabState(tab.id, { pinnedUrl: pinnedUrlForTab, bookmarkId: bookmarkIdForTab, pinnedItemId: pinnedItemIdForTab });
     }
 
     // Set up favicon
@@ -2563,8 +2549,9 @@ async function createTabElement(tab, isPinned = false, isBookmarkOnly = false) {
 
                         if (isPinned) {
                             const pinnedUrl = tabElement.dataset.pinnedUrl || tabUrl;
+                            const pinnedItemId = tabElement.dataset.itemId || null;
                             const bookmarkId = tabElement.dataset.bookmarkId || null;
-                            await Utils.setPinnedTabState(existingTab.id, { pinnedUrl: pinnedUrl, bookmarkId: bookmarkId });
+                            await Utils.setPinnedTabState(existingTab.id, { pinnedUrl: pinnedUrl, bookmarkId: bookmarkId, pinnedItemId: pinnedItemId });
                         }
 
                         // Update sidebar state if needed
@@ -2625,10 +2612,12 @@ async function createTabElement(tab, isPinned = false, isBookmarkOnly = false) {
                             // Replace the element with the active tab element
                             if (isPinned) {
                                 const pinnedUrl = tabElement.dataset.pinnedUrl || tabUrl;
+                                const pinnedItemId = tabElement.dataset.itemId || null;
                                 const bookmarkId = tabElement.dataset.bookmarkId || null;
                                 restoredTab.pinnedUrl = pinnedUrl;
+                                restoredTab.pinnedItemId = pinnedItemId;
                                 restoredTab.bookmarkId = bookmarkId;
-                                await Utils.setPinnedTabState(restoredTab.id, { pinnedUrl: pinnedUrl, bookmarkId: bookmarkId });
+                                await Utils.setPinnedTabState(restoredTab.id, { pinnedUrl: pinnedUrl, bookmarkId: bookmarkId, pinnedItemId: pinnedItemId });
                             }
                             const updatedTabElement = await createTabElement(restoredTab, isPinned, false);
                             tabElement.replaceWith(updatedTabElement);
@@ -2649,23 +2638,15 @@ async function createTabElement(tab, isPinned = false, isBookmarkOnly = false) {
                     }
 
                     const bookmarkData = {
+                        id: tabElement.dataset.itemId || null,
                         url: tabUrl,
                         title: bookmarkTitle,
                         sidebarName: tab.sidebarName || sidebarState.name,
                         pinnedUrl: tabElement.dataset.pinnedUrl || tabUrl,
+                        pinnedItemId: tabElement.dataset.itemId || null,
                         bookmarkId: tabElement.dataset.bookmarkId || null
                     };
-
-                    const context = {
-                        sidebarState,
-                        currentWindow,
-                        saveSidebarState,
-                        createTabElement,
-                        activateTabInDOM,
-                        Utils
-                    };
-
-                    await BookmarkUtils.openBookmarkAsTab(bookmarkData, tabElement, context, isPinned);
+                    await openPinnedItemAsTab(bookmarkData, tabElement);
 
                 } catch (error) {
                     Logger.error("Error opening bookmark:", error);
@@ -2710,8 +2691,12 @@ async function handlePinnedStateChange(tabId, tab, tabElement, isPinnedNow) {
         const stateWithTab = sidebarOwnsTab(tabId) ? sidebarState : null;
 
         if (stateWithTab && stateWithTab.pinnedTabIds.includes(tabId)) {
-            const bookmarkRoot = await getBookmarkRootFolder();
-            await BookmarkUtils.removeBookmarkByUrl(bookmarkRoot.id, tab.url);
+            const pinnedState = await Utils.getPinnedTabState(tabId);
+            if (pinnedState?.pinnedItemId) {
+                removePinnedItemById(pinnedState.pinnedItemId);
+            } else {
+                removePinnedItemByUrl(tab.url);
+            }
         }
 
         if (sidebarState) {
@@ -2894,91 +2879,36 @@ async function handleTabRemove(tabId) {
     if (isPinned) {
         // For pinned tabs, convert to bookmark-only element using existing bookmark data
         try {
-            // Find the bookmark in Chrome bookmarks
-            const bookmarkRoot = await getBookmarkRootFolder();
+            const pinnedState = await Utils.getPinnedTabState(tabId);
+            const pinnedItemId = tabElement?.dataset?.itemId || pinnedState?.pinnedItemId || null;
+            const matchingPinnedItem = pinnedItemId
+                ? Utils.findPinnedItemById(sidebarState?.pinnedItems || [], pinnedItemId)?.item
+                : Utils.findPinnedItemByUrl(sidebarState?.pinnedItems || [], tabElement?.dataset?.pinnedUrl || tabElement?.dataset?.url)?.item;
 
-            if (bookmarkRoot) {
-                // Try to get tab URL from Chrome API first, then fall back to DOM extraction
-                let tabUrl;
-                try {
-                    const tabData = await chrome.tabs.get(tabId);
-                    tabUrl = tabData.url;
-                    Logger.log('Found tab URL from Chrome API:', tabUrl);
-                } catch (error) {
-                    // Tab already closed, try to extract URL from DOM or other means
-                    Logger.log('Tab already closed, unable to get URL from Chrome API');
-                }
-
-                // Fallback: Extract URL from bookmark-only element's dataset if Chrome API failed
-                if (!tabUrl && tabElement) {
-                    Logger.log('!!!!!!!! TAB ELEMENT', tabElement);
-                    if (tabElement.dataset.url) {
-                        tabUrl = tabElement.dataset.url;
-                        Logger.log('Extracted URL from bookmark-only element dataset:', tabUrl);
-                    } else if (tabElement.classList.contains('bookmark-only')) {
-                        Logger.log('Bookmark-only element found but no URL in dataset - this should not happen');
-                    } else {
-                        Logger.log('Real tab element found but Chrome API failed - tab may have been closed very recently');
-                    }
-                }
-
-                // Use recursive search to find bookmark in the Arcify bookmark tree
-                let matchingBookmark = null;
-                if (tabUrl) {
-                    Logger.log('Searching for bookmark recursively with URL:', tabUrl);
-                    let bookmarkResult = await BookmarkUtils.findBookmarkInFolderRecursive(bookmarkRoot.id, { url: tabUrl });
-                    Logger.log('Bookmark search result:', bookmarkResult);
-                    matchingBookmark = bookmarkResult?.bookmark;
-                }
-
-                // If URL search failed, try fallback search by title (less reliable)
-                if (!matchingBookmark) {
-                    Logger.log('URL search failed, attempting fallback title search');
-                    const titleElement = tabElement.querySelector('.tab-title-display, .tab-details span');
-                    const titleText = titleElement?.textContent;
-
-                    if (titleText) {
-                        Logger.log('Searching for bookmark recursively with title:', titleText);
-                        let bookmarkResult = await BookmarkUtils.findBookmarkInFolderRecursive(bookmarkRoot.id, { title: titleText });
-                        Logger.log('Title search result:', bookmarkResult);
-                        matchingBookmark = bookmarkResult?.bookmark;
-                    }
-                }
-
-                if (matchingBookmark) {
-                    // Use the established pattern from loadTabs()
-                    const bookmarkTab = {
-                        id: null,
-                        title: matchingBookmark.title,
-                        url: matchingBookmark.url,
-                        favIconUrl: null,
-                        sidebarName: sidebarState?.name
-                    };
-                    const bookmarkElement = await createTabElement(bookmarkTab, true, true);
-
-                    // Preserve folder context - replace in the same DOM location
-                    const parentFolder = tabElement.closest('.folder');
-                    tabElement.replaceWith(bookmarkElement);
-                    if (parentFolder) syncCollapsedFolderTabs(parentFolder);
-
-                    // Update folder placeholder state if the tab was in a folder
-                    if (parentFolder) {
-                        Logger.log('Updated folder placeholder state after tab-to-bookmark conversion');
-                        updateFolderPlaceholder(parentFolder);
-                    }
-
-                    Logger.log('Successfully converted closed pinned tab to bookmark-only element in', parentFolder ? 'folder' : 'root level');
-                } else {
-                    Logger.warn('Could not find matching bookmark for closed pinned tab, removing element');
-                    tabElement.remove();
-                }
-            } else {
-                Logger.warn('Could not find Arcify bookmark root for closed pinned tab, removing element');
+            if (!matchingPinnedItem) {
+                Logger.warn('Could not find matching pinned item for closed pinned tab, removing element');
                 tabElement.remove();
+            } else {
+                const bookmarkTab = {
+                    id: null,
+                    title: matchingPinnedItem.title,
+                    url: matchingPinnedItem.url,
+                    favIconUrl: null,
+                    sidebarName: sidebarState?.name,
+                    pinnedUrl: matchingPinnedItem.url,
+                    pinnedItemId: matchingPinnedItem.id
+                };
+                const bookmarkElement = await createTabElement(bookmarkTab, true, true);
+
+                const parentFolder = tabElement.closest('.folder');
+                tabElement.replaceWith(bookmarkElement);
+                if (parentFolder) syncCollapsedFolderTabs(parentFolder);
+                if (parentFolder) {
+                    updateFolderPlaceholder(parentFolder);
+                }
             }
         } catch (error) {
-            Logger.error('Error converting pinned tab to bookmark-only element:', error);
-            // Fallback: just remove the element
+            Logger.error('Error converting pinned tab to inactive pinned item:', error);
             tabElement.remove();
         }
     } else {
@@ -3205,12 +3135,6 @@ async function moveTabInSidebar(tabId, pinned = false, openerTabId = null) {
                             return container.querySelector(`[data-tab-id="${t.id}"]`);
                         });
 
-                        // Apply invert order if enabled
-                        const invertTabOrder = await Utils.getInvertTabOrder();
-                        if (invertTabOrder) {
-                            tabsInContainer.reverse();
-                        }
-
                         // Re-append all tabs in correct order (including the new one)
                         tabsInContainer.forEach(t => {
                             const el = container.querySelector(`[data-tab-id="${t.id}"]`);
@@ -3219,13 +3143,7 @@ async function moveTabInSidebar(tabId, pinned = false, openerTabId = null) {
                             }
                         });
                     } else {
-                        // Fallback: use simple insert logic
-                        const invertTabOrder = await Utils.getInvertTabOrder();
-                        if (invertTabOrder) {
-                            container.insertBefore(tabElement, container.firstChild);
-                        } else {
-                            container.appendChild(tabElement);
-                        }
+                        container.appendChild(tabElement);
                     }
                 }
             }
@@ -3254,16 +3172,11 @@ function setupFolderContextMenu(folderElement, _state, item = null) {
         deleteOption.textContent = 'Delete Folder';
         deleteOption.addEventListener('click', async () => {
             if (confirm('Are you sure you want to delete this folder and all its contents?')) {
-                const collectionFolder = await getBookmarkRootFolder();
-                if (collectionFolder) {
-                    const folders = await chrome.bookmarks.getChildren(collectionFolder.id);
-                    const folderTitle = item ? item.title : folderElement.querySelector('.folder-title').textContent;
-                    const folder = folders.find(f => f.title === folderTitle);
-                    if (folder) {
-                        await chrome.bookmarks.removeTree(folder.id);
-                        folderElement.remove();
-                    }
+                const folderItemId = item?.id || folderElement.dataset.itemId || null;
+                if (folderItemId) {
+                    removePinnedItemById(folderItemId);
                 }
+                folderElement.remove();
             }
             contextMenu.remove();
         });

@@ -97,7 +97,6 @@ async function saveOptions() {
   const settings = {
     autoArchiveEnabled: getCheckboxValue(document.getElementById('autoArchiveEnabled'), false),
     autoArchiveIdleMinutes: parseInt(autoArchiveIdleMinutesInput?.value, 10) || 360,
-    invertTabOrder: getCheckboxValue(document.getElementById('invertTabOrder'), true),
     enableSpotlight: getCheckboxValue(document.getElementById('enableSpotlight'), true),
     showAllOpenTabsInCollapsedFolders: getCheckboxValue(document.getElementById('showAllOpenTabsInCollapsedFolders'), false),
     colorOverrides: Object.keys(colorOverrides).length > 0 ? colorOverrides : null,
@@ -136,7 +135,6 @@ async function restoreOptions() {
 
   // Restore checkbox values
   setCheckboxValue(document.getElementById('autoArchiveEnabled'), settings.autoArchiveEnabled, false);
-  setCheckboxValue(document.getElementById('invertTabOrder'), settings.invertTabOrder, true);
   setCheckboxValue(document.getElementById('enableSpotlight'), settings.enableSpotlight, true);
   setCheckboxValue(document.getElementById('showAllOpenTabsInCollapsedFolders'), settings.showAllOpenTabsInCollapsedFolders, false);
   setCheckboxValue(document.getElementById('debugLoggingEnabled'), settings.debugLoggingEnabled, false);
@@ -198,7 +196,7 @@ function debouncedSave() {
 // Function to setup auto-save listeners
 function setupAutoSave() {
   // Auto-save for checkboxes (most just save immediately)
-  const checkboxIds = ['invertTabOrder', 'enableSpotlight', 'showAllOpenTabsInCollapsedFolders', 'debugLoggingEnabled'];
+  const checkboxIds = ['enableSpotlight', 'showAllOpenTabsInCollapsedFolders', 'debugLoggingEnabled'];
   checkboxIds.forEach(id => addListenerIfExists(id, 'change', saveOptions));
 
   // Auto-archive checkbox needs special handling to update visibility
