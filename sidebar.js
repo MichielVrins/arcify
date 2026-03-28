@@ -24,15 +24,12 @@ import {
     showArchivedTabsPopup,
     setupQuickPinListener,
     getDragAfterElement,
-    getContainers,
-    getTabElement,
     getPinnedContainer,
     getTempContainer,
     clearAllActiveStates,
     hideAllDropIndicators,
     showDropIndicator,
     getDropPosition,
-    handleEmptyContainerDrop
 } from './domManager.js';
 import { BookmarkUtils } from './bookmark-utils.js';
 import { Logger } from './logger.js';
@@ -40,13 +37,11 @@ import { MOUSE_BUTTON } from './constants.js';
 
 // DOM Elements
 const tabsView = document.getElementById('tabsView');
-const newTabBtn = document.getElementById('newTabBtn');
 const sidebarTemplate = document.getElementById('sidebarTemplate');
 
 // Global state
 let sidebarState = null;
 let isOpeningBookmark = false;
-let isDraggingTab = false;
 let currentWindow = null;
 let showAllOpenTabsInCollapsedFolders = false; // default Arc behavior is false (active-only)
 let activeChromeTabId = null;
@@ -55,10 +50,6 @@ const MAIN_SIDEBAR_ID = 'main';
 // These tabs stay visible until user manually opens/closes the folder.
 // WeakMap<HTMLElement (folder), Set<number (tabId)>>
 const collapsedFolderShownTabs = new WeakMap();
-
-function getSidebarState() {
-    return sidebarState;
-}
 
 function sidebarOwnsTab(tabOrId) {
     const tabId = typeof tabOrId === 'object' ? tabOrId?.id : tabOrId;
@@ -2421,8 +2412,6 @@ async function createTabElement(tab, isPinned = false, isBookmarkOnly = false) {
     // --- Context Menu ---
     tabElement.addEventListener('contextmenu', async (e) => {
         e.preventDefault();
-        const arcifyFolder = await LocalStorage.getOrCreateArcifyFolder();
-        const allBookmarkCollectionFolders = await chrome.bookmarks.getChildren(arcifyFolder.id);
         showTabContextMenu(
             e.pageX,
             e.pageY,
@@ -2436,20 +2425,6 @@ async function createTabElement(tab, isPinned = false, isBookmarkOnly = false) {
     });
 
     return tabElement;
-}
-
-function createNewTab(callback = () => { }) {
-    Logger.log('Creating new tab...');
-    chrome.tabs.create({ active: true }, async (tab) => {
-        if (sidebarState) {
-            sidebarState.temporaryTabs.push(tab.id);
-            sidebarState.lastTab = tab.id;
-            saveSidebarState();
-            if (typeof callback === 'function') {
-                callback();
-            }
-        }
-    });
 }
 
 function handleTabCreated(tab) {

@@ -439,27 +439,6 @@ export function getCollectionElement() {
 }
 
 /**
- * Get both pinned and temporary containers for a sidebar view element
- * @param {HTMLElement} collectionElement - The sidebar view element
- * @returns {{pinned: HTMLElement|null, temp: HTMLElement|null}}
- */
-export function getContainers(collectionElement) {
-    return {
-        pinned: collectionElement?.querySelector('[data-tab-type="pinned"]') ?? null,
-        temp: collectionElement?.querySelector('[data-tab-type="temporary"]') ?? null
-    };
-}
-
-/**
- * Get a tab element by its ID
- * @param {number|string} tabId - The tab ID
- * @returns {HTMLElement|null}
- */
-export function getTabElement(tabId) {
-    return document.querySelector(`[data-tab-id="${tabId}"]`);
-}
-
-/**
  * Get pinned container for a sidebar view element
  * @param {HTMLElement} collectionElement - The sidebar view element
  * @returns {HTMLElement|null}
@@ -549,28 +528,3 @@ export function getDropPosition(element, clientX, clientY, isHorizontal = false)
     }
 }
 
-/**
- * Handle empty container drops consistently
- * @param {HTMLElement} container - The container element
- * @param {HTMLElement} draggingElement - The element being dragged
- * @param {HTMLElement} placeholder - The placeholder element
- * @returns {boolean} - True if handled successfully
- */
-export function handleEmptyContainerDrop(container, draggingElement, placeholder) {
-    if (!container || !draggingElement || !placeholder) return false;
-
-    // Append element to container
-    container.appendChild(draggingElement);
-
-    // Hide placeholder appropriately based on type
-    if (placeholder.classList.contains('pinned-placeholder-container')) {
-        // For favorites area - use display none
-        placeholder.style.display = 'none';
-    } else if (placeholder.classList.contains('tab-placeholder')) {
-        // For sidebar containers - use hidden class
-        placeholder.classList.add('hidden');
-    }
-
-    Logger.log('Handled empty container drop, hiding placeholder');
-    return true;
-}

@@ -95,16 +95,16 @@ chrome.commands.onCommand.addListener(async function (command) {
         // Send a message to the sidebar
         chrome.runtime.sendMessage({ command: "quickPinToggle" });
     } else if (command === "NextTabInCollection") {
-        Utils.findActiveCollectionAndTab().then(async ({ state, tab } = {}) => {
+        Utils.findActiveSidebarTab().then(async ({ state, tab } = {}) => {
             if (state) {
-                await Utils.moveToNextTabInCollection(tab.id, state);
+                await Utils.moveToNextTabInSidebar(tab.id, state);
             }
         });
     }
     else if (command === "PrevTabInCollection") {
-        Utils.findActiveCollectionAndTab().then(async ({ state, tab } = {}) => {
+        Utils.findActiveSidebarTab().then(async ({ state, tab } = {}) => {
             if (state) {
-                await Utils.moveToPrevTabInCollection(tab.id, state);
+                await Utils.moveToPrevTabInSidebar(tab.id, state);
             }
         });
         Logger.log("sending");

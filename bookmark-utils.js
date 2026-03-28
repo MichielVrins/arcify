@@ -414,7 +414,7 @@ export const BookmarkUtils = {
 
             const updated = await findAndUpdate(collectionFolder.id);
             if (!updated) {
-                Logger.log(`[BookmarkUtils] Bookmark for URL ${tab.url} not found in folder ${activeCollection.name}.`);
+                Logger.log(`[BookmarkUtils] Bookmark for URL ${tab.url} not found in folder ${activeState.name}.`);
             }
 
             return updated;

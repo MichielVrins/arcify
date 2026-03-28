@@ -445,14 +445,14 @@ const Utils = {
         chrome.tabs.update(allTabs[nextIndex], { active: true });
     },
 
-    moveToNextTabInCollection: async function (tabId, sidebarState) {
+    moveToNextTabInSidebar: async function (tabId, sidebarState) {
         return this._navigateTabInState(tabId, sidebarState, 'next');
     },
 
-    moveToPrevTabInCollection: async function (tabId, sidebarState) {
+    moveToPrevTabInSidebar: async function (tabId, sidebarState) {
         return this._navigateTabInState(tabId, sidebarState, 'prev');
     },
-    findActiveCollectionAndTab: async function () {
+    findActiveSidebarTab: async function () {
         Logger.log("[TabNavigation] finding active tab in sidebar state");
         const sidebarState = await this.getSidebarState();
         const foundTabs = await chrome.tabs.query({ active: true, currentWindow: true });
