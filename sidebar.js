@@ -1080,6 +1080,7 @@ async function moveTabToPinned(state, tab) {
     updatePinnedSectionPlaceholders();
 
     await reconcileTabOrdering({ source: 'arcify', movedTabId: tab.id });
+    return bookmarkIdToStore;
 }
 
 async function moveTabToTemp(state, tab) {
@@ -1302,7 +1303,9 @@ async function ensureFolderBookmark(folderElement, tab, draggingElement, isBookm
     }
 
     const existingBookmarks = await chrome.bookmarks.getChildren(folder.id);
-    const bookmarkAlreadyInTarget = Boolean(BookmarkUtils.findBookmarkByUrl(existingBookmarks, tab.url));
+    const existingBookmark = BookmarkUtils.findBookmarkByUrl(existingBookmarks, tab.url);
+    const bookmarkAlreadyInTarget = Boolean(existingBookmark);
+    let bookmarkId = existingBookmark?.id || null;
 
     const targetFolderContentEl = folderElement.querySelector('.folder-content');
     if (targetFolderContentEl && !isBookmarkOnly && tab?.url) {
@@ -1315,24 +1318,47 @@ async function ensureFolderBookmark(folderElement, tab, draggingElement, isBookm
 
     if (!bookmarkAlreadyInTarget) {
         await BookmarkUtils.removeBookmarkByUrl(bookmarkRoot.id, tab.url);
-        await chrome.bookmarks.create({
+        const createdBookmark = await chrome.bookmarks.create({
             parentId: folder.id,
             title: tab.title,
             url: tab.url
         });
+        bookmarkId = createdBookmark?.id || null;
     }
 
+    folderElement.dataset.bookmarkId = folder.id;
     updateFolderPlaceholder(folderElement);
+    return { folderId: folder.id, bookmarkId };
 }
 
 async function pinDroppedLiveTab(state, tab) {
-    await moveTabToPinned(state, tab);
+    const bookmarkId = await moveTabToPinned(state, tab);
     saveSidebarState();
+    return bookmarkId;
 }
 
 async function movePinnedItemToFolder(tab, targetFolderElement, draggingElement, isBookmarkOnly) {
-    await ensureFolderBookmark(targetFolderElement, tab, draggingElement, isBookmarkOnly);
+    const result = await ensureFolderBookmark(targetFolderElement, tab, draggingElement, isBookmarkOnly);
     saveSidebarState();
+    return result;
+}
+
+async function attachBookmarkMetadataToTabElement(draggingElement, tab, bookmarkId, pinnedUrl = null) {
+    if (draggingElement && bookmarkId) {
+        draggingElement.dataset.bookmarkId = bookmarkId;
+    }
+    if (draggingElement && pinnedUrl) {
+        draggingElement.dataset.pinnedUrl = pinnedUrl;
+    }
+    if (draggingElement && tab?.url) {
+        draggingElement.dataset.url = tab.url;
+    }
+    if (tab?.id && bookmarkId) {
+        await Utils.setPinnedTabState(tab.id, {
+            bookmarkId,
+            pinnedUrl: pinnedUrl || tab.url
+        });
+    }
 }
 
 async function moveTabToTemporary(state, tab) {
@@ -1343,6 +1369,112 @@ async function convertFavoriteDrop(draggingElement, targetIsPinned) {
     return convertFavoriteToTab(draggingElement, targetIsPinned);
 }
 
+async function resolveBookmarkIdForTabElement(tabElement, bookmarkRootId) {
+    if (!tabElement) return null;
+
+    if (tabElement.dataset.bookmarkId) {
+        return tabElement.dataset.bookmarkId;
+    }
+
+    const tabId = tabElement.dataset.tabId ? parseInt(tabElement.dataset.tabId) : null;
+    if (tabId) {
+        const stored = await Utils.getPinnedTabState(tabId);
+        if (stored?.bookmarkId) {
+            tabElement.dataset.bookmarkId = stored.bookmarkId;
+            if (stored.pinnedUrl) tabElement.dataset.pinnedUrl = stored.pinnedUrl;
+            return stored.bookmarkId;
+        }
+    }
+
+    const lookupUrl = tabElement.dataset.pinnedUrl || tabElement.dataset.url;
+    if (!lookupUrl) return null;
+
+    const result = await BookmarkUtils.findBookmarkInFolderRecursive(bookmarkRootId, { url: lookupUrl });
+    const bookmarkId = result?.bookmark?.id || null;
+    if (bookmarkId) {
+        tabElement.dataset.bookmarkId = bookmarkId;
+    }
+    return bookmarkId;
+}
+
+async function resolveFolderBookmarkId(folderElement, bookmarkRootId) {
+    if (!folderElement) return null;
+
+    if (folderElement.dataset.bookmarkId) {
+        return folderElement.dataset.bookmarkId;
+    }
+
+    const folderName = folderElement.querySelector('.folder-name')?.value?.trim();
+    if (!folderName) return null;
+
+    const rootChildren = await chrome.bookmarks.getChildren(bookmarkRootId);
+    const folder = rootChildren.find(item => !item.url && item.title === folderName);
+    if (!folder?.id) return null;
+
+    folderElement.dataset.bookmarkId = folder.id;
+    return folder.id;
+}
+
+async function syncFolderBookmarkOrderFromDom(folderContent, parentBookmarkId, bookmarkRootId) {
+    const folderChildren = Array.from(folderContent.children)
+        .filter(child => child.classList?.contains('tab') && !child.classList.contains('tab-placeholder'));
+
+    let index = 0;
+    for (const child of folderChildren) {
+        const bookmarkId = await resolveBookmarkIdForTabElement(child, bookmarkRootId);
+        if (!bookmarkId) continue;
+
+        await chrome.bookmarks.move(bookmarkId, {
+            parentId: parentBookmarkId,
+            index
+        });
+        index += 1;
+    }
+}
+
+async function syncPinnedBookmarksFromDom(sidebarView) {
+    const pinnedContainer = getPinnedContainer(sidebarView);
+    if (!pinnedContainer) return;
+
+    const bookmarkRoot = await getBookmarkRootFolder();
+    if (!bookmarkRoot?.id) return;
+
+    const rootChildren = Array.from(pinnedContainer.children)
+        .filter(child =>
+            (child.classList?.contains('tab') && !child.classList.contains('tab-placeholder')) ||
+            child.classList?.contains('folder')
+        );
+
+    let rootIndex = 0;
+    for (const child of rootChildren) {
+        if (child.classList.contains('folder')) {
+            const folderBookmarkId = await resolveFolderBookmarkId(child, bookmarkRoot.id);
+            if (!folderBookmarkId) continue;
+
+            await chrome.bookmarks.move(folderBookmarkId, {
+                parentId: bookmarkRoot.id,
+                index: rootIndex
+            });
+            rootIndex += 1;
+
+            const folderContent = child.querySelector('.folder-content');
+            if (folderContent) {
+                await syncFolderBookmarkOrderFromDom(folderContent, folderBookmarkId, bookmarkRoot.id);
+            }
+            continue;
+        }
+
+        const bookmarkId = await resolveBookmarkIdForTabElement(child, bookmarkRoot.id);
+        if (!bookmarkId) continue;
+
+        await chrome.bookmarks.move(bookmarkId, {
+            parentId: bookmarkRoot.id,
+            index: rootIndex
+        });
+        rootIndex += 1;
+    }
+}
+
 // Apply bookmark/state mutations after the drop handler has already positioned the DOM.
 async function handleBookmarkOperations(draggingElement, container, targetFolder) {
     if (!draggingElement || !container) {
@@ -1350,11 +1482,14 @@ async function handleBookmarkOperations(draggingElement, container, targetFolder
         return;
     }
 
+    let shouldSyncPinnedBookmarks = false;
+
     try {
         if (container.dataset.tabType === 'pinned' && (draggingElement.dataset.tabId || draggingElement.dataset.url)) {
+            shouldSyncPinnedBookmarks = true;
             if (draggingElement.classList.contains('pinned-favicon')) {
                 await convertFavoriteDrop(draggingElement, true);
-                return;
+                return shouldSyncPinnedBookmarks;
             }
 
             const state = sidebarState;
@@ -1366,12 +1501,13 @@ async function handleBookmarkOperations(draggingElement, container, targetFolder
             const { tab, tabId, isBookmarkOnly } = await getDraggedTab(draggingElement);
             if (!tab) {
                 Logger.error(`Tab not found for ID: ${tabId}`);
-                return;
+                return shouldSyncPinnedBookmarks;
             }
 
             const targetFolderElement = targetFolder ? targetFolder.closest('.folder') : null;
             if (targetFolderElement) {
-                await movePinnedItemToFolder(tab, targetFolderElement, draggingElement, isBookmarkOnly);
+                const { bookmarkId } = await movePinnedItemToFolder(tab, targetFolderElement, draggingElement, isBookmarkOnly);
+                await attachBookmarkMetadataToTabElement(draggingElement, tab, bookmarkId, tab.url);
                 if (!isBookmarkOnly && tabId) {
                     state.temporaryTabs = state.temporaryTabs.filter(id => id !== tabId);
                     if (!state.pinnedTabIds.includes(tabId)) {
@@ -1379,13 +1515,14 @@ async function handleBookmarkOperations(draggingElement, container, targetFolder
                     }
                     saveSidebarState();
                 }
-                return;
+                return shouldSyncPinnedBookmarks;
             }
 
             if (!isBookmarkOnly) {
-                await pinDroppedLiveTab(state, tab);
+                const bookmarkId = await pinDroppedLiveTab(state, tab);
+                await attachBookmarkMetadataToTabElement(draggingElement, tab, bookmarkId, tab.url);
             }
-            return;
+            return shouldSyncPinnedBookmarks;
         }
 
         if (container.dataset.tabType === 'temporary' && draggingElement.dataset.tabId) {
@@ -1395,7 +1532,7 @@ async function handleBookmarkOperations(draggingElement, container, targetFolder
                 if (state) {
                     await moveTabToTemporary(state, tab);
                 }
-                return;
+                return shouldSyncPinnedBookmarks;
             }
 
             const tabId = parseInt(draggingElement.dataset.tabId);
@@ -1404,7 +1541,7 @@ async function handleBookmarkOperations(draggingElement, container, targetFolder
             if (state && tab) {
                 await moveTabToTemporary(state, tab);
             }
-            return;
+            return shouldSyncPinnedBookmarks;
         }
 
         if (draggingElement.classList.contains('pinned-favicon') && draggingElement.dataset.tabId) {
@@ -1416,6 +1553,8 @@ async function handleBookmarkOperations(draggingElement, container, targetFolder
     } finally {
         updatePinnedSectionPlaceholders();
     }
+
+    return shouldSyncPinnedBookmarks;
 }
 
 /**
@@ -1625,7 +1764,7 @@ async function setupDragAndDrop(pinnedContainer, tempContainer) {
                 }
 
                 // Handle bookmark operations after DOM positioning is complete
-                await handleBookmarkOperations(draggingElement, container, targetFolder);
+                const shouldSyncPinnedBookmarks = await handleBookmarkOperations(draggingElement, container, targetFolder);
 
                 // Resync collapsed-folder projections/icons after move (source + destination)
                 if (dragSourceFolderElement) {
@@ -1633,6 +1772,17 @@ async function setupDragAndDrop(pinnedContainer, tempContainer) {
                 }
                 if (targetFolderElement && targetFolderElement !== dragSourceFolderElement) {
                     syncCollapsedFolderTabs(targetFolderElement);
+                }
+
+                if (shouldSyncPinnedBookmarks) {
+                    try {
+                        const sidebarView = container.closest('.sidebar-view') || document.querySelector('.sidebar-view');
+                        if (sidebarView) {
+                            await syncPinnedBookmarksFromDom(sidebarView);
+                        }
+                    } catch (error) {
+                        Logger.error('Error syncing pinned bookmarks from DOM:', error);
+                    }
                 }
 
                 // Update the model from the DOM (Arcify is source of truth here), then reconcile Chrome.
@@ -1780,10 +1930,13 @@ async function createNewFolder(sidebarView) {
                 const existingFolders = await chrome.bookmarks.getChildren(bookmarkRoot.id);
                 const folder = existingFolders.find(f => f.title === newName);
                 if (!folder) {
-                    await chrome.bookmarks.create({
+                    const createdFolder = await chrome.bookmarks.create({
                         parentId: bookmarkRoot.id,
                         title: newName
                     });
+                    folderElement.dataset.bookmarkId = createdFolder.id;
+                } else {
+                    folderElement.dataset.bookmarkId = folder.id;
                 }
             }
         }
@@ -1855,6 +2008,7 @@ async function loadTabs(state, pinnedContainer, tempContainer) {
                         const folderContent = folderElement.querySelector('.folder-content');
                         const folderToggle = folderElement.querySelector('.folder-toggle');
                         const placeHolderElement = folderElement.querySelector('.tab-placeholder');
+                        folderElement.dataset.bookmarkId = item.id;
                         // Set up folder toggle functionality
                         // Add context menu for folder
                         setupFolderContextMenu(folderElement, state, item);
