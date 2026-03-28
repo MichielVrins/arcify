@@ -14,7 +14,6 @@
  */
 
 import { Logger } from './logger.js';
-import { SINGLE_SPACE_MODE } from './constants.js';
 
 export const BookmarkUtils = {
 
@@ -227,7 +226,6 @@ export const BookmarkUtils = {
     async openBookmarkAsTab(bookmarkData, targetSpaceId, replaceElement = null, context, isPinned) {
         const {
             spaces,
-            activeSpaceId,
             currentWindow,
             saveSpaces,
             createTabElement,
@@ -248,10 +246,6 @@ export const BookmarkUtils = {
         // If bookmark has a custom name, set tab name override
         if (bookmarkData.title && newTab.title !== bookmarkData.title) {
             await Utils.setTabNameOverride(newTab.id, bookmarkData.url, bookmarkData.title);
-        }
-
-        if (!SINGLE_SPACE_MODE) {
-            await chrome.tabs.group({ tabIds: [newTab.id], groupId: targetSpaceId });
         }
 
         if (isPinned) {

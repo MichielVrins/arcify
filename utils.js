@@ -453,14 +453,14 @@ const Utils = {
         chrome.tabs.update(allTabs[nextIndex], { active: true });
     },
 
-    movToNextTabInSpace: async function (tabId, sidebarState) {
+    moveToNextTabInCollection: async function (tabId, sidebarState) {
         return this._navigateTabInState(tabId, sidebarState, 'next');
     },
 
-    movToPrevTabInSpace: async function (tabId, sidebarState) {
+    moveToPrevTabInCollection: async function (tabId, sidebarState) {
         return this._navigateTabInState(tabId, sidebarState, 'prev');
     },
-    findActiveSpaceAndTab: async function () {
+    findActiveCollectionAndTab: async function () {
         Logger.log("[TabNavigation] finding active tab in sidebar state");
         const sidebarState = await this.getSidebarState();
         const foundTabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -480,6 +480,19 @@ const Utils = {
         }
 
         return undefined
+    },
+
+    movToNextTabInSpace: async function (tabId, sidebarState) {
+        return this.moveToNextTabInCollection(tabId, sidebarState);
+    },
+
+    movToPrevTabInSpace: async function (tabId, sidebarState) {
+        return this.moveToPrevTabInCollection(tabId, sidebarState);
+    },
+
+    findActiveSpaceAndTab: async function () {
+        const result = await this.findActiveCollectionAndTab();
+        return result ? { space: result.space, tab: result.tab } : undefined;
     },
 
     // Helper function to adjust menu position to keep it within viewport

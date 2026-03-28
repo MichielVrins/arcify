@@ -15,87 +15,15 @@
 import { Utils } from './utils.js';
 import { RESTORE_ICON } from './icons.js';
 import { Logger } from './logger.js';
-import { SINGLE_SPACE_MODE } from './constants.js';
 
 // DOM Elements
-const spacesList = document.getElementById('spacesList');
-const spaceSwitcher = document.getElementById('spaceSwitcher');
-const addSpaceBtn = document.getElementById('addSpaceBtn');
 const newTabBtn = document.getElementById('newTabBtn');
-const spaceTemplate = document.getElementById('spaceTemplate');
 
 export function setupDOMElements(createNewSpace) {
-    const switcherContainer = document.querySelector('.space-switcher-container');
-    if (switcherContainer) {
-        switcherContainer.style.display = 'none';
-    }
-
     newTabBtn.addEventListener('click', () => {
         chrome.runtime.sendMessage({ command: "toggleSpotlightNewTab" });
     });
 
-    if (SINGLE_SPACE_MODE) {
-        return;
-    }
-
-    spaceSwitcher.addEventListener('wheel', (event) => {
-        event.preventDefault();
-
-        const scrollAmount = event.deltaY;
-
-        spaceSwitcher.scrollLeft += scrollAmount;
-    }, { passive: false });
-
-    // Add event listeners for buttons
-    addSpaceBtn.addEventListener('click', () => {
-        const inputContainer = document.getElementById('addSpaceInputContainer');
-        const spaceNameInput = document.getElementById('newSpaceName');
-        const isInputVisible = inputContainer.classList.contains('visible');
-
-        // Toggle visibility classes
-        inputContainer.classList.toggle('visible');
-        addSpaceBtn.classList.toggle('active');
-
-        // Toggle space switcher visibility
-        if (isInputVisible) {
-            spaceSwitcher.style.opacity = '1';
-            spaceSwitcher.style.visibility = 'visible';
-        } else {
-            spaceNameInput.value = '';
-            spaceSwitcher.style.opacity = '0';
-            spaceSwitcher.style.visibility = 'hidden';
-        }
-    });
-
-    document.getElementById('createSpaceBtn').addEventListener('click', createNewSpace);
-    newTabBtn.addEventListener('click', () => {
-        // Trigger spotlight instead of creating a new tab
-        chrome.runtime.sendMessage({ command: "toggleSpotlightNewTab" });
-    });
-
-    const createSpaceColorSwatch = document.getElementById('createSpaceColorSwatch');
-    createSpaceColorSwatch.addEventListener('click', (e) => {
-        if (e.target.classList.contains('color-swatch')) {
-            const colorPicker = document.getElementById('createSpaceColorSwatch');
-            const select = document.getElementById('spaceColor');
-            const color = e.target.dataset.color;
-
-            // Update selected swatch
-            colorPicker.querySelectorAll('.color-swatch').forEach(swatch => {
-                swatch.classList.remove('selected');
-            });
-            e.target.classList.add('selected');
-
-            // Update hidden select value
-            select.value = color;
-
-            // Trigger change event on select
-            const event = new Event('change');
-            select.dispatchEvent(event);
-        }
-    });
-
-    // Initialize selected swatches
     document.querySelectorAll('.space-color-select').forEach(select => {
         const colorPicker = select.nextElementSibling;
         const currentColor = select.value;
@@ -105,30 +33,6 @@ export function setupDOMElements(createNewSpace) {
         }
     });
 
-    // Add input validation for new space name
-    document.getElementById('newSpaceName').addEventListener('input', (e) => {
-        const createSpaceBtn = document.getElementById('createSpaceBtn');
-        createSpaceBtn.disabled = !e.target.value.trim();
-    });
-}
-
-export function showSpaceNameInput() {
-    const addSpaceBtn = document.getElementById('addSpaceBtn');
-    const addSpaceInputContainer = document.getElementById('addSpaceInputContainer');
-
-    addSpaceBtn.classList.toggle('active');
-    addSpaceInputContainer.classList.toggle('visible');
-    const errorPopup = document.createElement('div');
-    errorPopup.className = 'error-popup';
-    errorPopup.textContent = 'A space with this name already exists';
-    const inputContainer = document.getElementById('addSpaceInputContainer');
-    inputContainer.appendChild(errorPopup);
-
-    // Remove the error message after 3 seconds
-    setTimeout(() => {
-        errorPopup.remove();
-    }, 3000);
-    return;
 }
 
 export function activateTabInDOM(tabId) {
@@ -164,7 +68,7 @@ export function activateSpaceInDOM(spaceId, spaces, updateSpaceSwitcher) {
     updateSpaceSwitcher();
 }
 
-export function showTabContextMenu(x, y, tab, isPinned, isBookmarkOnly, tabElement, closeTab, spaces, moveTabToSpace, setActiveSpace, allBookmarkSpaceFolders, createSpaceFromInactive, onReplaceBookmarkUrlWithCurrent = null) {
+export function showTabContextMenu(x, y, tab, isPinned, isBookmarkOnly, tabElement, closeTab, _itemsState, _moveItem, _activateView, _bookmarkFolders, _createCollectionFromInactive, onReplaceBookmarkUrlWithCurrent = null) {
     // Remove any existing context menus
     const existingMenu = document.getElementById('tab-context-menu');
     if (existingMenu) {
@@ -191,14 +95,14 @@ export function showTabContextMenu(x, y, tab, isPinned, isBookmarkOnly, tabEleme
         });
         contextMenu.appendChild(addToFavoritesOption);
 
-        const pinInSpaceOption = document.createElement('div');
-        pinInSpaceOption.className = 'context-menu-item';
-        pinInSpaceOption.textContent = isPinned ? 'Unpin Tab' : 'Pin Tab';
-        pinInSpaceOption.addEventListener('click', () => {
-            chrome.runtime.sendMessage({ command: 'toggleSpacePin', tabId: tab.id });
+        const pinOption = document.createElement('div');
+        pinOption.className = 'context-menu-item';
+        pinOption.textContent = isPinned ? 'Unpin Tab' : 'Pin Tab';
+        pinOption.addEventListener('click', () => {
+            chrome.runtime.sendMessage({ command: 'togglePin', tabId: tab.id });
             contextMenu.remove();
         });
-        contextMenu.appendChild(pinInSpaceOption);
+        contextMenu.appendChild(pinOption);
 
         // Arc-like: allow updating the underlying space bookmark URL to the current tab URL.
         if (isPinned && typeof onReplaceBookmarkUrlWithCurrent === 'function') {
@@ -215,86 +119,6 @@ export function showTabContextMenu(x, y, tab, isPinned, isBookmarkOnly, tabEleme
                 }
             });
             contextMenu.appendChild(replaceBookmarkUrlOption);
-        }
-
-        if (!SINGLE_SPACE_MODE) {
-            const separator = document.createElement('div');
-            separator.className = 'context-menu-separator';
-            contextMenu.appendChild(separator);
-
-            const moveToSpaceItem = document.createElement('div');
-            moveToSpaceItem.className = 'context-menu-item with-submenu';
-            moveToSpaceItem.textContent = 'Move to Space';
-
-            const submenu = document.createElement('div');
-            submenu.className = 'context-menu submenu';
-
-            const currentSpace = spaces.find(s => s.temporaryTabs.includes(tab.id) || s.spaceBookmarks.includes(tab.id));
-            const otherActiveSpaces = spaces.filter(s => s.id !== currentSpace?.id);
-            otherActiveSpaces.forEach(space => {
-                const submenuItem = document.createElement('div');
-                submenuItem.className = 'context-menu-item';
-                submenuItem.textContent = space.name;
-                submenuItem.addEventListener('click', async (e) => {
-                    e.stopPropagation();
-                    contextMenu.remove();
-
-                    await moveTabToSpace(tab.id, space.id, false);
-                    await setActiveSpace(space.id, false);
-                    await chrome.tabs.update(tab.id, { active: true });
-                });
-                submenu.appendChild(submenuItem);
-            });
-
-            const activeSpaceNames = new Set(spaces.map(s => s.name));
-            const inactiveSpaceFolders = allBookmarkSpaceFolders.filter(f => !f.url && !activeSpaceNames.has(f.title));
-
-            if (otherActiveSpaces.length > 0 && inactiveSpaceFolders.length > 0) {
-                const separator = document.createElement('div');
-                separator.className = 'context-menu-separator';
-                submenu.appendChild(separator);
-            }
-
-            inactiveSpaceFolders.forEach(folder => {
-                const submenuItem = document.createElement('div');
-                submenuItem.className = 'context-menu-item';
-                submenuItem.textContent = folder.title;
-                submenuItem.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    createSpaceFromInactive(folder.title, tab);
-                    contextMenu.remove();
-                });
-                submenu.appendChild(submenuItem);
-            });
-
-            if (submenu.hasChildNodes()) {
-                moveToSpaceItem.appendChild(submenu);
-                contextMenu.appendChild(moveToSpaceItem);
-
-                moveToSpaceItem.addEventListener('mouseenter', () => {
-                    requestAnimationFrame(() => {
-                        const submenuRect = submenu.getBoundingClientRect();
-                        const parentRect = moveToSpaceItem.getBoundingClientRect();
-                        const viewportWidth = window.innerWidth;
-                        const viewportHeight = window.innerHeight;
-
-                        submenu.style.left = '';
-                        submenu.style.right = '';
-                        submenu.style.top = '';
-                        submenu.style.bottom = '';
-
-                        if (parentRect.right + submenuRect.width > viewportWidth) {
-                            submenu.style.left = 'auto';
-                            submenu.style.right = '100%';
-                        }
-
-                        if (parentRect.top + submenuRect.height > viewportHeight) {
-                            submenu.style.top = 'auto';
-                            submenu.style.bottom = '0';
-                        }
-                    });
-                });
-            }
         }
     }
 
@@ -488,7 +312,7 @@ export function showUrlCopyToast() {
 
 export function setupQuickPinListener(moveTabToSpace, moveTabToPinned, moveTabToTemp, currentActiveSpaceId, setActiveSpaceFunc, activatePinnedTabByURL) {
     chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
-        if (request.command === "quickPinToggle" || request.command === "toggleSpacePin") {
+        if (request.command === "quickPinToggle" || request.command === "togglePin") {
             Logger.log(`[QuickPin] Received command: ${request.command}`, { request });
             Utils.getSidebarState().then((sidebarState) => {
                 Logger.log("[QuickPin] Loaded sidebar state:", sidebarState);
@@ -520,8 +344,8 @@ export function setupQuickPinListener(moveTabToSpace, moveTabToPinned, moveTabTo
                     chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
                         getTabAndToggle(tabs[0]);
                     });
-                } else if (request.command === "toggleSpacePin" && request.tabId) {
-                    Logger.log(`[QuickPin] Handling toggleSpacePin for tabId: ${request.tabId}`);
+                } else if (request.command === "togglePin" && request.tabId) {
+                    Logger.log(`[QuickPin] Handling togglePin for tabId: ${request.tabId}`);
                     chrome.tabs.get(request.tabId, function (tab) {
                         getTabAndToggle(tab);
                     });

@@ -80,10 +80,6 @@ export const SELECTORS = {
     BOOKMARK_ONLY_TABS: '.tab.bookmark-only',
     DRAGGABLE_TABS: '.tab:not(.dragging), .folder:not(.dragging)',
 
-    // Space selectors
-    SPACE_BY_ID: (spaceId) => `[data-space-id="${spaceId}"]`,
-    ALL_SPACES: '.space',
-
     // Container selectors
     PINNED_CONTAINER: '[data-tab-type="pinned"]',
     TEMP_CONTAINER: '[data-tab-type="temporary"]',
@@ -93,9 +89,6 @@ export const SELECTORS = {
     DRAGGABLE_PINNED_FAVICONS: '.pinned-favicon:not(.dragging)',
     ACTIVE_PINNED_FAVICONS: '.pinned-favicon.active',
 
-    // Switcher selectors
-    DRAGGABLE_SWITCHER_BUTTONS: 'button:not(.dragging-switcher)',
-
     // Folder selectors
     ALL_FOLDERS: '.folder',
     FOLDER_CONTENT: '.folder-content',
@@ -103,20 +96,12 @@ export const SELECTORS = {
     // Template selectors
     TAB_TEMPLATE: '#tabTemplate',
     FOLDER_TEMPLATE: '#folderTemplate',
-    SPACE_TEMPLATE: '#spaceTemplate',
 
     // UI element selectors
     SIDEBAR_CONTAINER: '#sidebar-container',
     SPACES_LIST: '#spacesList',
-    SPACE_SWITCHER: '#spaceSwitcher',
     PINNED_FAVICONS: '#pinnedFavicons',
-    ADD_SPACE_BTN: '#addSpaceBtn',
     NEW_TAB_BTN: '#newTabBtn',
-    ADD_SPACE_INPUT_CONTAINER: '#addSpaceInputContainer',
-    NEW_SPACE_NAME: '#newSpaceName',
-    SPACE_COLOR: '#spaceColor',
-    CREATE_SPACE_BTN: '#createSpaceBtn',
-    CREATE_SPACE_COLOR_SWATCH: '#createSpaceColorSwatch',
     URL_COPY_TOAST: '#urlCopyToast',
     TAB_CONTEXT_MENU: '#tab-context-menu',
 
@@ -171,6 +156,3 @@ export const AXIS = {
     X: 'x',
     Y: 'y',
 };
-
-// Temporary product direction: keep one internal space and hide multi-space UX.
-export const SINGLE_SPACE_MODE = true;

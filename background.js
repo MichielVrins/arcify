@@ -81,8 +81,8 @@ if (chrome.contextMenus) {
 // Listen for messages from the content script (sidebar)
 chrome.runtime.onMessage.addListener(async function (request, sender, sendResponse) {
     // Forward the pin toggle command to the sidebar
-    if (request.command === "toggleSpacePin") {
-        chrome.runtime.sendMessage({ command: "toggleSpacePin", tabId: request.tabId });
+    if (request.command === "togglePin") {
+        chrome.runtime.sendMessage({ command: "togglePin", tabId: request.tabId });
     } else if (request.command === "toggleSpotlight") {
         await injectSpotlightScript(SpotlightTabMode.CURRENT_TAB);
     } else if (request.command === "toggleSpotlightNewTab") {
@@ -95,16 +95,16 @@ chrome.commands.onCommand.addListener(async function (command) {
         // Send a message to the sidebar
         chrome.runtime.sendMessage({ command: "quickPinToggle" });
     } else if (command === "NextTabInSpace") {
-        Utils.findActiveSpaceAndTab().then(async ({ space, tab }) => {
-            if (space) {
-                await Utils.movToNextTabInSpace(tab.id, space);
+        Utils.findActiveCollectionAndTab().then(async ({ state, tab } = {}) => {
+            if (state) {
+                await Utils.moveToNextTabInCollection(tab.id, state);
             }
         });
     }
     else if (command === "PrevTabInSpace") {
-        Utils.findActiveSpaceAndTab().then(async ({ space, tab }) => {
-            if (space) {
-                await Utils.movToPrevTabInSpace(tab.id, space);
+        Utils.findActiveCollectionAndTab().then(async ({ state, tab } = {}) => {
+            if (state) {
+                await Utils.moveToPrevTabInCollection(tab.id, state);
             }
         });
         Logger.log("sending");
