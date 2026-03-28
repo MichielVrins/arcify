@@ -185,18 +185,14 @@ const Utils = {
     },
 
     getTabGroupColor: async function (groupName) {
-        let tabGroups = await chrome.tabGroups.query({});
-
-        const chromeTabGroupColors = [
-            'grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan'
-        ];
-        const existingGroup = tabGroups.find(group => group.title === groupName);
-        if (existingGroup) {
-            return existingGroup.color;
-        } else {
-            const randomIndex = Math.floor(Math.random() * chromeTabGroupColors.length);
-            return chromeTabGroupColors[randomIndex];
+        const sidebarColors = ['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan'];
+        const input = String(groupName || 'Home');
+        let hash = 0;
+        for (let i = 0; i < input.length; i += 1) {
+            hash = ((hash << 5) - hash) + input.charCodeAt(i);
+            hash |= 0;
         }
+        return sidebarColors[Math.abs(hash) % sidebarColors.length];
     },
 
     // Function to get if archiving is enabled

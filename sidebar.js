@@ -22,7 +22,7 @@ import {
     applySidebarColor,
     showTabContextMenu,
     showArchivedTabsPopup,
-    setupQuickPinListener,
+    showUrlCopyToast,
     getDragAfterElement,
     getPinnedContainer,
     getTempContainer,
@@ -556,6 +556,105 @@ async function activatePinnedTabByURL(bookmarkUrl) {
     }
 }
 
+function updateSpotlightButtonState(mode, isOpen) {
+    const newTabBtn = document.getElementById('newTabBtn');
+    if (!newTabBtn || mode !== 'new-tab') {
+        return;
+    }
+    newTabBtn.classList.toggle('spotlight-active', isOpen);
+}
+
+async function toggleSidebarPinForTab(tabToToggle) {
+    if (!tabToToggle) {
+        Logger.error("[QuickPin] No tab found to toggle.");
+        return;
+    }
+
+    const state = await Utils.getSidebarState();
+    Logger.log("[QuickPin] Toggling pin state for tab:", tabToToggle);
+
+    if (state.temporaryTabs.includes(tabToToggle.id)) {
+        Logger.log(`[QuickPin] Tab ${tabToToggle.id} is a temporary tab. Pinning it.`);
+        await moveTabInSidebar(tabToToggle.id, true);
+        await moveTabToPinned(state, tabToToggle);
+        return;
+    }
+
+    if (state.pinnedTabIds.includes(tabToToggle.id)) {
+        Logger.log(`[QuickPin] Tab ${tabToToggle.id} is a pinned tab. Unpinning it.`);
+        await moveTabInSidebar(tabToToggle.id, false);
+        await moveTabToTemp(state, tabToToggle);
+        return;
+    }
+
+    Logger.warn(`[QuickPin] Tab ${tabToToggle.id} not found in the sidebar state.`);
+}
+
+function setupSidebarRuntimeListeners() {
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+        if (request.command === "quickPinToggle" || request.command === "togglePin") {
+            Logger.log(`[QuickPin] Received command: ${request.command}`, { request });
+
+            if (request.command === "quickPinToggle") {
+                chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+                    await toggleSidebarPinForTab(tabs[0]);
+                });
+            } else if (request.command === "togglePin" && request.tabId) {
+                chrome.tabs.get(request.tabId, async (tab) => {
+                    await toggleSidebarPinForTab(tab);
+                });
+            }
+            return false;
+        }
+
+        if (request.command === "copyCurrentUrl") {
+            Logger.log(`[URLCopy] Sidebar fallback - copying URL: ${request.url}`);
+
+            if (navigator.clipboard && request.url) {
+                navigator.clipboard.writeText(request.url).then(() => {
+                    Logger.log(`[URLCopy] Sidebar fallback succeeded: ${request.url}`);
+                    showUrlCopyToast();
+                    sendResponse({ success: true });
+                }).catch(err => {
+                    Logger.error("[URLCopy] Sidebar fallback failed:", err);
+                    sendResponse({ success: false, error: err.message });
+                });
+            } else {
+                Logger.error("[URLCopy] Sidebar fallback failed: navigator.clipboard not available or no URL");
+                sendResponse({ success: false, error: "Clipboard API not available" });
+            }
+            return true;
+        }
+
+        if (request.action === "urlCopySuccess") {
+            Logger.log("[URLCopy] Received success message from background script");
+            showUrlCopyToast();
+            sendResponse({ success: true });
+            return false;
+        }
+
+        if (request.action === "spotlightOpened") {
+            Logger.log("[Spotlight] Spotlight opened with mode:", request.mode);
+            updateSpotlightButtonState(request.mode, true);
+            return false;
+        }
+
+        if (request.action === "spotlightClosed") {
+            Logger.log("[Spotlight] Spotlight closed");
+            updateSpotlightButtonState('new-tab', false);
+            return false;
+        }
+
+        if (request.action === "activatePinnedTab") {
+            Logger.log("[Spotlight] Activating pinned tab:", request);
+            activatePinnedTabByURL(request.bookmarkUrl);
+            return false;
+        }
+
+        return false;
+    });
+}
+
 // Initialize the sidebar when the DOM is loaded
 document.addEventListener('DOMContentLoaded', async () => {
     Logger.log('DOM loaded, initializing sidebar...');
@@ -596,8 +695,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     chrome.tabs.onRemoved.addListener(handleTabRemove);
     chrome.tabs.onMoved.addListener(handleTabMove);
     chrome.tabs.onActivated.addListener(handleTabActivated);
-    // Setup Quick Pin listener
-    setupQuickPinListener(moveTabInSidebar, moveTabToPinned, moveTabToTemp, activatePinnedTabByURL);
+    setupSidebarRuntimeListeners();
 
     // Tab navigation listener
     // Add event listener for placeholder close button
@@ -882,8 +980,16 @@ async function cleanTemporaryTabs() {
         return;
     }
 
-    sidebarState.temporaryTabs = [];
-    sidebarState.lastTab = sidebarState.pinnedTabIds[0] ?? null;
+    const currentTabs = await chrome.tabs.query({ currentWindow: true });
+    const remainingTabs = currentTabs.filter(tab => !tabIdsToClose.includes(tab.id));
+
+    let fallbackTab = null;
+    if (remainingTabs.length === 0) {
+        fallbackTab = await chrome.tabs.create({ active: true });
+    }
+
+    sidebarState.temporaryTabs = fallbackTab ? [fallbackTab.id] : [];
+    sidebarState.lastTab = sidebarState.pinnedTabIds[0] ?? fallbackTab?.id ?? null;
     saveSidebarState();
 
     try {
@@ -1925,6 +2031,16 @@ function updateChevronState(sidebarView, pinnedContainer) {
     }
 }
 
+async function ensureFallbackTabBeforeClose(tabId) {
+    const currentTabs = await chrome.tabs.query({ currentWindow: true });
+    const isLastLiveTab = currentTabs.length === 1 && currentTabs[0]?.id === tabId;
+    if (!isLastLiveTab) {
+        return null;
+    }
+
+    return chrome.tabs.create({ active: true });
+}
+
 async function closeTab(tabElement, tab, isPinned = false, isBookmarkOnly = false) {
     Logger.log('Closing tab:', tab, tabElement, isPinned, isBookmarkOnly);
 
@@ -1966,6 +2082,7 @@ async function closeTab(tabElement, tab, isPinned = false, isBookmarkOnly = fals
         tabElement.replaceWith(inactiveTabElement);
         if (parentFolder) syncCollapsedFolderTabs(parentFolder);
 
+        await ensureFallbackTabBeforeClose(tab.id);
         chrome.tabs.remove(tab.id);
 
         const sidebarView = document.querySelector('.sidebar-view');
@@ -1975,6 +2092,7 @@ async function closeTab(tabElement, tab, isPinned = false, isBookmarkOnly = fals
         }
         return;
     } else {
+        await ensureFallbackTabBeforeClose(tab.id);
         chrome.tabs.remove(tab.id);
     }
 
