@@ -47,6 +47,9 @@ let showAllOpenTabsInCollapsedFolders = false; // default Arc behavior is false 
 let activeChromeTabId = null;
 const MAIN_SIDEBAR_ID = 'main';
 const { LINK: PINNED_LINK_TYPE, FOLDER: PINNED_FOLDER_TYPE } = Utils.getPinnedItemTypeConstants();
+const { SIDEBAR: SIDEBAR_ITEM_PLACEMENT, FAVORITE: FAVORITE_ITEM_PLACEMENT } = Utils.getPinnedItemPlacementConstants();
+let favoriteRenderVersion = 0;
+const pendingFavoriteOpenUrls = new Set();
 // Arc-like behavior: track which tabs have been active in each collapsed folder.
 // These tabs stay visible until user manually opens/closes the folder.
 // WeakMap<HTMLElement (folder), Set<number (tabId)>>
@@ -60,6 +63,16 @@ function sidebarOwnsTab(tabOrId) {
     );
 }
 
+function isFavoriteBackedTab(tabId, pinnedStatesById = null) {
+    if (!tabId) return false;
+    const pinnedState = pinnedStatesById ? pinnedStatesById[tabId] : null;
+    if (!pinnedState?.pinnedItemId || !sidebarState?.pinnedItems) {
+        return false;
+    }
+    const item = Utils.findPinnedItemById(sidebarState.pinnedItems, pinnedState.pinnedItemId)?.item;
+    return item?.type === PINNED_LINK_TYPE && item?.placement === FAVORITE_ITEM_PLACEMENT;
+}
+
 function normalizeStoredState(storedState, fallbackName, fallbackColor) {
     return {
         id: MAIN_SIDEBAR_ID,
@@ -71,6 +84,56 @@ function normalizeStoredState(storedState, fallbackName, fallbackColor) {
         temporaryTabs: Array.isArray(storedState?.temporaryTabs) ? storedState.temporaryTabs : [],
         lastTab: storedState?.lastTab ?? null
     };
+}
+
+function isFavoriteItem(item) {
+    return item?.type === PINNED_LINK_TYPE && item?.placement === FAVORITE_ITEM_PLACEMENT;
+}
+
+function getRootFavoriteItems(items = sidebarState?.pinnedItems || []) {
+    if (!Array.isArray(items)) return [];
+    return items.filter(isFavoriteItem);
+}
+
+function getSidebarPinnedItems(items = sidebarState?.pinnedItems || []) {
+    if (!Array.isArray(items)) return [];
+    return items.filter(item => !isFavoriteItem(item));
+}
+
+function insertFavoriteItemAtRoot(item, targetIndex = null) {
+    if (!sidebarState) return item;
+    if (!Array.isArray(sidebarState.pinnedItems)) {
+        sidebarState.pinnedItems = [];
+    }
+
+    const rootItems = sidebarState.pinnedItems;
+    item.placement = FAVORITE_ITEM_PLACEMENT;
+    const favoriteCount = rootItems.filter(isFavoriteItem).length;
+    const clampedIndex = targetIndex == null
+        ? favoriteCount
+        : Math.max(0, Math.min(targetIndex, favoriteCount));
+    rootItems.splice(clampedIndex, 0, item);
+    return item;
+}
+
+function promotePinnedItemToFavorite(itemId, targetIndex = null) {
+    if (!sidebarState?.pinnedItems || !itemId) return null;
+    const found = Utils.findPinnedItemById(sidebarState.pinnedItems, itemId);
+    if (!found?.item || found.item.type !== PINNED_LINK_TYPE) return null;
+
+    found.siblings.splice(found.index, 1);
+    found.item.placement = FAVORITE_ITEM_PLACEMENT;
+    return insertFavoriteItemAtRoot(found.item, targetIndex);
+}
+
+function demoteFavoriteItemToSidebar(itemId) {
+    if (!sidebarState?.pinnedItems || !itemId) return null;
+    const found = Utils.findPinnedItemById(sidebarState.pinnedItems, itemId);
+    if (!found?.item || found.item.type !== PINNED_LINK_TYPE) return null;
+    found.siblings.splice(found.index, 1);
+    found.item.placement = SIDEBAR_ITEM_PLACEMENT;
+    sidebarState.pinnedItems.push(found.item);
+    return found.item;
 }
 
 async function getBookmarkRootFolder() {
@@ -168,9 +231,10 @@ async function initializeSidebarState(storedState, allTabs) {
     const color = effectiveStoredState?.color || await Utils.getTabGroupColor(name);
 
     const currentTabs = Array.isArray(allTabs) ? allTabs : await chrome.tabs.query({ currentWindow: true });
+    const pinnedStatesById = await Utils.getPinnedTabStates();
     const pinnedTabIds = await getOpenPinnedTabIds(migratedPinnedItems, currentTabs);
     const temporaryTabs = currentTabs
-        .filter(tab => !tab.pinned && !pinnedTabIds.includes(tab.id))
+        .filter(tab => !tab.pinned && !pinnedTabIds.includes(tab.id) && !isFavoriteBackedTab(tab.id, pinnedStatesById))
         .map(tab => tab.id);
 
     sidebarState = normalizeStoredState(effectiveStoredState, name, color);
@@ -193,7 +257,7 @@ async function updatePinnedItemTitleById(itemId, newTitle) {
     const found = Utils.findPinnedItemById(sidebarState.pinnedItems, itemId);
     if (!found?.item) return;
     found.item.title = newTitle;
-    saveSidebarState();
+    await Utils.saveSidebarState(sidebarState || {});
 }
 
 async function updatePinnedItemUrlById(itemId, newUrl, newTitle = null) {
@@ -407,99 +471,317 @@ function reapplySidebarColors() {
     sidebarContainer.style.setProperty('--collection-bg-color-dark', colorDarkValue);
 }
 
-// Function to update pinned favicons
-async function updatePinnedFavicons() {
-    const pinnedFavicons = document.getElementById('pinnedFavicons');
-    const pinnedTabs = await chrome.tabs.query({ pinned: true });
-
-    // Remove favicon elements for tabs that are no longer pinned
-    Array.from(pinnedFavicons.children).forEach(element => {
-        // Only remove elements that are pinned favicons (have the pinned-favicon class)
-        if (element.classList.contains('pinned-favicon')) {
-            const tabId = element.dataset.tabId;
-            if (!pinnedTabs.some(tab => tab.id.toString() === tabId)) {
-                element.remove();
-            }
-        }
+async function syncFavoriteTabState(tabId, favoriteItem) {
+    await Utils.setPinnedTabState(tabId, {
+        pinnedItemId: favoriteItem.id,
+        bookmarkId: null,
+        pinnedUrl: favoriteItem.url
     });
+}
 
-    pinnedTabs.forEach(tab => {
-        // Check if favicon element already exists for this tab
-        const existingElement = pinnedFavicons.querySelector(`[data-tab-id="${tab.id}"]`);
-        if (!existingElement) {
-            const faviconElement = document.createElement('div');
-            faviconElement.className = 'pinned-favicon';
-            faviconElement.title = tab.title;
-            faviconElement.dataset.tabId = tab.id;
-            faviconElement.draggable = true; // Make pinned favicon draggable
+function syncFavoriteItemsFromDom(favoritesContainer) {
+    if (!sidebarState?.pinnedItems) return;
+    const orderedFavoriteIds = Array.from(favoritesContainer.querySelectorAll('.pinned-favicon[data-item-id]'))
+        .map(el => el.dataset.itemId);
+    const favoriteItemsById = orderedFavoriteIds
+        .map(id => Utils.findPinnedItemById(sidebarState.pinnedItems, id)?.item)
+        .filter(item => isFavoriteItem(item));
+    const nonFavorites = getSidebarPinnedItems(sidebarState.pinnedItems);
+    if (favoriteItemsById.length === getRootFavoriteItems(sidebarState.pinnedItems).length) {
+        sidebarState.pinnedItems = [...favoriteItemsById, ...nonFavorites];
+        saveSidebarState();
+    }
+}
 
-            const img = document.createElement('img');
-            img.src = Utils.getFaviconUrl(tab.url, "96");
-            img.onerror = () => {
-                img.src = tab.favIconUrl;
-                img.onerror = () => { img.src = 'assets/default_icon.png'; }; // Fallback favicon
-            };
-            img.alt = tab.title;
+async function openFavoriteItem(favoriteItem) {
+    const tabs = await chrome.tabs.query({ currentWindow: true });
+    const pinnedStates = await Utils.getPinnedTabStates();
+    const existingTab = tabs.find(tab =>
+        pinnedStates?.[tab.id]?.pinnedItemId === favoriteItem.id ||
+        tab.url === favoriteItem.url
+    );
 
-            faviconElement.appendChild(img);
-            faviconElement.addEventListener('mousedown', (event) => {
-                if (event.button === MOUSE_BUTTON.LEFT) {
-                    clearAllActiveStates();
-                    // Add active class to clicked tab
-                    faviconElement.classList.add('active');
-                    chrome.tabs.update(tab.id, { active: true });
-                }
-            });
-
-            // Add drag event listeners for pinned favicon
-            faviconElement.addEventListener('dragstart', () => {
-                faviconElement.classList.add('dragging');
-            });
-
-            faviconElement.addEventListener('dragend', () => {
-                faviconElement.classList.remove('dragging');
-            });
-
-            pinnedFavicons.appendChild(faviconElement);
-        }
-    });
-
-    // Show/hide placeholder based on whether there are pinned tabs
-    const placeholderContainer = pinnedFavicons.querySelector('.pinned-placeholder-container');
-    if (placeholderContainer) {
-        if (pinnedTabs.length === 0) {
-            placeholderContainer.style.display = 'block';
+    if (existingTab) {
+        if (Utils.getPinnedUrlKey(existingTab.url) !== Utils.getPinnedUrlKey(favoriteItem.url)) {
+            await chrome.tabs.update(existingTab.id, { url: favoriteItem.url, active: true });
         } else {
-            placeholderContainer.style.display = 'none';
+            await chrome.tabs.update(existingTab.id, { active: true });
+        }
+        await syncFavoriteTabState(existingTab.id, favoriteItem);
+        await updatePinnedFavicons();
+        activateTabInDOM(existingTab.id);
+        return existingTab;
+    }
+
+    pendingFavoriteOpenUrls.add(favoriteItem.url);
+    try {
+        isOpeningBookmark = true;
+        const newTab = await chrome.tabs.create({
+            url: favoriteItem.url,
+            active: true,
+            windowId: currentWindow?.id
+        });
+        await syncFavoriteTabState(newTab.id, favoriteItem);
+        await updatePinnedFavicons();
+        activateTabInDOM(newTab.id);
+        return newTab;
+    } finally {
+        isOpeningBookmark = false;
+        pendingFavoriteOpenUrls.delete(favoriteItem.url);
+    }
+}
+
+async function addFavoriteItemForTab(tab, targetIndex = null) {
+    if (!sidebarState || !tab?.url) return null;
+    return addFavoriteItem({ title: tab.title, url: tab.url }, targetIndex, tab.id);
+}
+
+async function addFavoriteItem(favoriteLike, targetIndex = null, tabId = null) {
+    if (!sidebarState || !favoriteLike?.url) return null;
+    if (!Array.isArray(sidebarState.pinnedItems)) {
+        sidebarState.pinnedItems = [];
+    }
+
+    const existingFavorite = Utils.findPinnedItemByUrl(sidebarState.pinnedItems, favoriteLike.url)?.item;
+    if (existingFavorite) {
+        promotePinnedItemToFavorite(existingFavorite.id, targetIndex);
+        if (tabId) {
+            await syncFavoriteTabState(tabId, existingFavorite);
+        }
+        saveSidebarState();
+        return existingFavorite;
+    }
+
+    const favoriteItem = Utils.createPinnedLinkItem({
+        title: favoriteLike.title,
+        url: favoriteLike.url
+    });
+    favoriteItem.placement = FAVORITE_ITEM_PLACEMENT;
+
+    insertFavoriteItemAtRoot(favoriteItem, targetIndex);
+
+    if (tabId) {
+        await syncFavoriteTabState(tabId, favoriteItem);
+        sidebarState.temporaryTabs = (sidebarState.temporaryTabs || []).filter(id => id !== tabId);
+        if (!sidebarState.pinnedTabIds.includes(tabId)) {
+            sidebarState.pinnedTabIds.push(tabId);
+        }
+        sidebarState.lastTab = tabId;
+    }
+    saveSidebarState();
+    return favoriteItem;
+}
+
+async function movePinnedElementToFavorites(draggingElement, targetIndex) {
+    if (!sidebarState || !draggingElement) return;
+
+    const tabId = draggingElement.dataset.tabId ? parseInt(draggingElement.dataset.tabId) : null;
+    const itemId = draggingElement.dataset.itemId || null;
+    const titleElement = draggingElement.querySelector('.tab-title-display');
+    const favoriteLike = {
+        title: titleElement?.textContent || draggingElement.title || 'Favorite',
+        url: draggingElement.dataset.pinnedUrl || draggingElement.dataset.url
+    };
+
+    if (!favoriteLike.url) return;
+
+    const favoriteItem = await addFavoriteItem(favoriteLike, targetIndex, tabId);
+    if (!favoriteItem) return;
+
+    if (itemId) {
+        promotePinnedItemToFavorite(itemId, targetIndex);
+    } else {
+        const existingItem = Utils.findPinnedItemByUrl(sidebarState.pinnedItems || [], favoriteLike.url)?.item;
+        if (existingItem) {
+            promotePinnedItemToFavorite(existingItem.id, targetIndex);
         }
     }
 
-    // Add drag and drop event listeners
+    if (tabId && sidebarState) {
+        sidebarState.temporaryTabs = sidebarState.temporaryTabs.filter(id => id !== tabId);
+        if (!sidebarState.pinnedTabIds.includes(tabId)) {
+            sidebarState.pinnedTabIds.push(tabId);
+        }
+        await Utils.setPinnedTabState(tabId, {
+            pinnedItemId: favoriteItem.id,
+            bookmarkId: null,
+            pinnedUrl: favoriteItem.url
+        });
+        saveSidebarState();
+    }
+
+    const parentFolder = draggingElement.closest('.folder');
+    draggingElement.remove();
+    if (parentFolder) {
+        syncCollapsedFolderTabs(parentFolder);
+        updateFolderPlaceholder(parentFolder);
+    }
+    updatePinnedSectionPlaceholders();
+}
+
+async function movePinnedTabToFavorites(tab, targetIndex = null) {
+    if (!sidebarState || !tab?.url) return null;
+
+    const pinnedState = await Utils.getPinnedTabState(tab.id);
+    const pinnedItemId = pinnedState?.pinnedItemId || null;
+    const pinnedItem = pinnedItemId
+        ? Utils.findPinnedItemById(sidebarState.pinnedItems || [], pinnedItemId)?.item
+        : Utils.findPinnedItemByUrl(sidebarState.pinnedItems || [], pinnedState?.pinnedUrl || tab.url)?.item;
+
+    const favoriteItem = await addFavoriteItem({
+        title: pinnedItem?.title || tab.title,
+        url: pinnedItem?.url || pinnedState?.pinnedUrl || tab.url
+    }, targetIndex, tab.id);
+
+    if (!favoriteItem) return null;
+
+    if (pinnedItem?.id) {
+        promotePinnedItemToFavorite(pinnedItem.id, targetIndex);
+    }
+
+    sidebarState.temporaryTabs = (sidebarState.temporaryTabs || []).filter(id => id !== tab.id);
+    if (!sidebarState.pinnedTabIds.includes(tab.id)) {
+        sidebarState.pinnedTabIds.push(tab.id);
+    }
+    await Utils.setPinnedTabState(tab.id, {
+        pinnedItemId: favoriteItem.id,
+        bookmarkId: null,
+        pinnedUrl: favoriteItem.url
+    });
+    saveSidebarState();
+
+    return favoriteItem;
+}
+
+// Function to update favorite favicons
+async function updatePinnedFavicons() {
+    const pinnedFavicons = document.getElementById('pinnedFavicons');
+    if (!pinnedFavicons || !sidebarState) return;
+    const renderVersion = ++favoriteRenderVersion;
+
+    const currentTabs = await chrome.tabs.query({ currentWindow: true });
+    const pinnedStatesById = await Utils.getPinnedTabStates();
+    const favoriteItems = getRootFavoriteItems(sidebarState.pinnedItems);
+    if (renderVersion !== favoriteRenderVersion) return;
+
+    Array.from(pinnedFavicons.querySelectorAll('.pinned-favicon')).forEach(element => element.remove());
+
+    favoriteItems.forEach(favoriteItem => {
+        const existingTab = currentTabs.find(tab =>
+            pinnedStatesById?.[tab.id]?.pinnedItemId === favoriteItem.id ||
+            tab.url === favoriteItem.url
+        );
+
+        const faviconElement = document.createElement('div');
+        faviconElement.className = 'pinned-favicon';
+        faviconElement.title = favoriteItem.title;
+        faviconElement.dataset.itemId = favoriteItem.id;
+        if (existingTab?.id) {
+            faviconElement.dataset.tabId = existingTab.id;
+            if (existingTab.active || existingTab.id === activeChromeTabId) {
+                faviconElement.classList.add('active');
+            }
+        }
+        faviconElement.draggable = true;
+
+        const img = document.createElement('img');
+        img.src = Utils.getFaviconUrl(existingTab?.url || favoriteItem.url, "96");
+        img.onerror = () => {
+            img.src = existingTab?.favIconUrl || 'assets/default_icon.png';
+            img.onerror = () => { img.src = 'assets/default_icon.png'; };
+        };
+        img.alt = favoriteItem.title;
+
+        faviconElement.appendChild(img);
+        faviconElement.addEventListener('mousedown', async (event) => {
+            if (event.button !== MOUSE_BUTTON.LEFT) return;
+            clearAllActiveStates();
+            faviconElement.classList.add('active');
+            await openFavoriteItem(favoriteItem);
+        });
+
+        faviconElement.addEventListener('dragstart', () => {
+            faviconElement.classList.add('dragging');
+        });
+
+        faviconElement.addEventListener('dragend', () => {
+            faviconElement.classList.remove('dragging');
+        });
+
+        faviconElement.addEventListener('contextmenu', async (event) => {
+            event.preventDefault();
+
+            const favoriteTab = existingTab || {
+                id: null,
+                title: favoriteItem.title,
+                url: favoriteItem.url,
+                pinnedItemId: favoriteItem.id
+            };
+
+            const closeFavoriteFromMenu = async (tabElement, tab, isPinned, isBookmarkOnly) => {
+                if (isBookmarkOnly || !tab?.id) {
+                    await closeTab(tabElement, {
+                        ...favoriteTab,
+                        title: favoriteItem.title,
+                        url: favoriteItem.url,
+                        pinnedItemId: favoriteItem.id
+                    }, true, true);
+                    return;
+                }
+
+                await ensureFallbackTabBeforeClose(tab.id);
+                await chrome.tabs.remove(tab.id);
+            };
+
+            showTabContextMenu(
+                event.pageX,
+                event.pageY,
+                favoriteTab,
+                true,
+                !existingTab,
+                faviconElement,
+                closeFavoriteFromMenu,
+                null,
+                {
+                    showAddToFavorites: false,
+                    showPinOption: false
+                }
+            );
+        });
+
+        pinnedFavicons.appendChild(faviconElement);
+    });
+
+    const placeholderContainer = pinnedFavicons.querySelector('.pinned-placeholder-container');
+    if (placeholderContainer) {
+        placeholderContainer.style.display = favoriteItems.length === 0 ? 'block' : 'none';
+    }
+
+    if (pinnedFavicons.dataset.favoriteDnDInitialized === 'true') {
+        return;
+    }
+
+    pinnedFavicons.dataset.favoriteDnDInitialized = 'true';
+
     pinnedFavicons.addEventListener('dragover', e => {
         e.preventDefault();
         e.currentTarget.classList.add('drag-over');
 
-        // Show drop indicator for horizontal favicons
         const draggingElement = document.querySelector('.dragging');
         if (draggingElement) {
             const afterElement = getDragAfterElementFavicon(pinnedFavicons, e.clientX);
             if (afterElement) {
-                // Check if this is a placeholder (empty container)
                 if (afterElement.classList.contains('pinned-placeholder-container')) {
-                    // Show visual feedback on the placeholder itself
                     afterElement.classList.add('drag-over');
-                    hideAllDropIndicators(); // Don't show traditional indicators for placeholders
+                    hideAllDropIndicators();
                 } else {
-                    // Show traditional drop indicators for actual favicons
                     const position = getDropPosition(afterElement, e.clientX, e.clientY, true);
                     showDropIndicator(afterElement, position, true);
-                    // Remove any placeholder drag-over state
                     const placeholder = pinnedFavicons.querySelector('.pinned-placeholder-container');
                     if (placeholder) placeholder.classList.remove('drag-over');
                 }
             } else {
                 hideAllDropIndicators();
-                // Remove any placeholder drag-over state
                 const placeholder = pinnedFavicons.querySelector('.pinned-placeholder-container');
                 if (placeholder) placeholder.classList.remove('drag-over');
             }
@@ -509,10 +791,8 @@ async function updatePinnedFavicons() {
     pinnedFavicons.addEventListener('dragleave', e => {
         e.preventDefault();
         e.currentTarget.classList.remove('drag-over');
-        // Hide indicators when leaving the pinned favicons area
         if (!pinnedFavicons.contains(e.relatedTarget)) {
             hideAllDropIndicators();
-            // Remove any placeholder drag-over state
             const placeholder = pinnedFavicons.querySelector('.pinned-placeholder-container');
             if (placeholder) placeholder.classList.remove('drag-over');
         }
@@ -521,84 +801,61 @@ async function updatePinnedFavicons() {
     pinnedFavicons.addEventListener('drop', async e => {
         e.preventDefault();
         e.currentTarget.classList.remove('drag-over');
-        hideAllDropIndicators(); // Clean up indicators on drop
-        // Remove any placeholder drag-over state
+        hideAllDropIndicators();
         const placeholder = pinnedFavicons.querySelector('.pinned-placeholder-container');
         if (placeholder) placeholder.classList.remove('drag-over');
+
         const draggingElement = document.querySelector('.dragging');
-        if (draggingElement && draggingElement.dataset.tabId) {
-            const tabId = parseInt(draggingElement.dataset.tabId);
+        if (!draggingElement) return;
 
-            // If dragging a pinned favicon to reorder, handle positioning
-            if (draggingElement.classList.contains('pinned-favicon')) {
-                const afterElement = getDragAfterElementFavicon(pinnedFavicons, e.clientX);
-                if (afterElement) {
-                    // Check if this is a placeholder (empty container)
-                    if (afterElement.classList.contains('pinned-placeholder-container')) {
-                        // Empty container - append directly and hide placeholder
-                        pinnedFavicons.appendChild(draggingElement);
-                        afterElement.style.display = 'none';
-                    } else {
-                        // Normal positioning logic for actual favicons
-                        const position = getDropPosition(afterElement, e.clientX, e.clientY, true);
+        const afterElement = getDragAfterElementFavicon(pinnedFavicons, e.clientX);
+        let targetIndex = 0;
+        if (afterElement) {
+            if (afterElement.classList.contains('pinned-placeholder-container')) {
+                targetIndex = 0;
+            } else {
+                const position = getDropPosition(afterElement, e.clientX, e.clientY, true);
+                targetIndex = calculatePinnedTabIndex(afterElement, position, pinnedFavicons);
+            }
+        } else {
+            targetIndex = pinnedFavicons.querySelectorAll('.pinned-favicon').length;
+        }
 
-                        // Position element based on indicator logic
-                        if (position === 'left') {
-                            pinnedFavicons.insertBefore(draggingElement, afterElement);
-                        } else { // 'right'
-                            const nextSibling = afterElement.nextElementSibling;
-                            if (nextSibling) {
-                                pinnedFavicons.insertBefore(draggingElement, nextSibling);
-                            } else {
-                                pinnedFavicons.appendChild(draggingElement);
-                            }
-                        }
-                    }
+        if (draggingElement.classList.contains('pinned-favicon')) {
+            if (afterElement && !afterElement.classList.contains('pinned-placeholder-container')) {
+                const position = getDropPosition(afterElement, e.clientX, e.clientY, true);
+                if (position === 'left') {
+                    pinnedFavicons.insertBefore(draggingElement, afterElement);
                 } else {
-                    // Fallback: append to end
-                    pinnedFavicons.appendChild(draggingElement);
+                    const nextSibling = afterElement.nextElementSibling;
+                    if (nextSibling) {
+                        pinnedFavicons.insertBefore(draggingElement, nextSibling);
+                    } else {
+                        pinnedFavicons.appendChild(draggingElement);
+                    }
                 }
             } else {
-                // Dragging a regular tab to make it pinned
-                const afterElement = getDragAfterElementFavicon(pinnedFavicons, e.clientX);
-                let position = null;
-                let targetIndex = 0; // Default to index 0 for empty containers
-
-                if (afterElement) {
-                    if (afterElement.classList.contains('pinned-placeholder-container')) {
-                        // Empty container - use index 0 and hide placeholder after pinning
-                        targetIndex = 0;
-                    } else {
-                        // Normal positioning logic for actual favicons
-                        position = getDropPosition(afterElement, e.clientX, e.clientY, true);
-                        targetIndex = calculatePinnedTabIndex(afterElement, position, pinnedFavicons);
-                    }
-                }
-
-                // Step 1: Pin the tab (this adds it to the end by default)
-                await chrome.tabs.update(tabId, { pinned: true });
-
-                // Step 2: Move it to the correct position if needed
-                if (targetIndex !== undefined && targetIndex >= 0) {
-                    try {
-                        await chrome.tabs.move(tabId, { index: targetIndex });
-                    } catch (error) {
-                        Logger.warn('Error moving pinned tab to target index:', error);
-                    }
-                }
-
-                // Step 3: Update the favicon display
-                updatePinnedFavicons();
-
-                // Hide placeholder if this was an empty container
-                if (afterElement && afterElement.classList.contains('pinned-placeholder-container')) {
-                    afterElement.style.display = 'none';
-                }
-
-                // Remove the tab from its original container
-                draggingElement.remove();
+                pinnedFavicons.appendChild(draggingElement);
             }
+            syncFavoriteItemsFromDom(pinnedFavicons);
+            return;
         }
+
+        const isPinnedSidebarItem = draggingElement.classList.contains('tab') &&
+            (draggingElement.dataset.itemId || draggingElement.closest('[data-tab-type="pinned"]'));
+
+        if (isPinnedSidebarItem) {
+            await movePinnedElementToFavorites(draggingElement, targetIndex);
+            await refreshSidebarUI();
+            await updatePinnedFavicons();
+            return;
+        }
+
+        if (!draggingElement.dataset.tabId) return;
+        const tabId = parseInt(draggingElement.dataset.tabId);
+        const tab = await chrome.tabs.get(tabId);
+        await addFavoriteItemForTab(tab, targetIndex);
+        await updatePinnedFavicons();
     });
 }
 
@@ -682,6 +939,25 @@ async function pinSidebarTab(tabToToggle) {
     await moveTabToPinned(sidebarState, tabToToggle);
 }
 
+async function favoriteSidebarTab(tabToToggle) {
+    if (!tabToToggle) {
+        Logger.error("[Favorite] No tab found to favorite.");
+        return;
+    }
+
+    const pinnedState = await Utils.getPinnedTabState(tabToToggle.id);
+    const isPinnedSidebarTab = sidebarState?.pinnedTabIds?.includes(tabToToggle.id) || Boolean(pinnedState?.pinnedItemId);
+
+    if (isPinnedSidebarTab) {
+        await movePinnedTabToFavorites(tabToToggle);
+        await refreshSidebarUI();
+    } else {
+        await addFavoriteItemForTab(tabToToggle);
+        await refreshSidebarUI();
+    }
+    await updatePinnedFavicons();
+}
+
 async function unpinSidebarTab(tabToToggle) {
     if (!tabToToggle) {
         Logger.error("[Pin] No tab found to unpin.");
@@ -731,19 +1007,21 @@ async function toggleSidebarPinForTab(tabToToggle) {
 
 function setupSidebarRuntimeListeners() {
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-        if (request.command === "quickPinToggle" || request.command === "pinTab" || request.command === "unpinTab") {
+        if (request.command === "quickPinToggle" || request.command === "pinTab" || request.command === "unpinTab" || request.command === "favoriteTab") {
             Logger.log(`[Pin] Received command: ${request.command}`, { request });
 
             if (request.command === "quickPinToggle") {
                 chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
                     await toggleSidebarPinForTab(tabs[0]);
                 });
-            } else if ((request.command === "pinTab" || request.command === "unpinTab") && request.tabId) {
+            } else if ((request.command === "pinTab" || request.command === "unpinTab" || request.command === "favoriteTab") && request.tabId) {
                 chrome.tabs.get(request.tabId, async (tab) => {
                     if (request.command === "pinTab") {
                         await pinSidebarTab(tab);
                     } else if (request.command === "unpinTab") {
                         await unpinSidebarTab(tab);
+                    } else if (request.command === "favoriteTab") {
+                        await favoriteSidebarTab(tab);
                     }
                 });
             }
@@ -816,14 +1094,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    initSidebar();
-    updatePinnedFavicons(); // Initial load of pinned favicons
+    await initSidebar();
+    await updatePinnedFavicons(); // Initial load of favorites
 
     // Add Chrome tab event listeners
     chrome.tabs.onCreated.addListener(handleTabCreated);
     chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         handleTabUpdate(tabId, changeInfo, tab);
-        if (tab.pinned) updatePinnedFavicons(); // Update favicons when a tab is pinned/unpinned
+        updatePinnedFavicons();
     });
     chrome.tabs.onRemoved.addListener(handleTabRemove);
     chrome.tabs.onMoved.addListener(handleTabMove);
@@ -831,15 +1109,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupSidebarRuntimeListeners();
 
     // Tab navigation listener
-    // Add event listener for placeholder close button
-    const closePlaceholderBtn = document.querySelector('.placeholder-close-btn');
-    const placeholderContainer = document.querySelector('.pinned-placeholder-container');
-    if (closePlaceholderBtn && placeholderContainer) {
-        closePlaceholderBtn.addEventListener('click', () => {
-            placeholderContainer.style.display = 'none';
-        });
-    }
-
 });
 
 async function initSidebar() {
@@ -895,31 +1164,6 @@ function renderSidebarView(state) {
         colorSelect.dispatchEvent(new Event('change'));
     });
 
-    const nameInput = sidebarElement.querySelector('.sidebar-name');
-    nameInput.value = state.name;
-    nameInput.addEventListener('change', async () => {
-        state.name = nameInput.value;
-        saveSidebarState();
-    });
-
-    const chevronButton = sidebarElement.querySelector('.sidebar-toggle-chevron');
-    const pinnedSection = sidebarElement.querySelector('.pinned-tabs');
-    const isPinnedCollapsed = localStorage.getItem('arcify-pinned-collapsed') === 'true';
-    if (isPinnedCollapsed) {
-        chevronButton.classList.add('collapsed');
-        pinnedSection.classList.add('collapsed');
-    }
-    updateChevronState(sidebarElement, pinnedSection);
-
-    chevronButton.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const isCollapsed = chevronButton.classList.contains('collapsed');
-        chevronButton.classList.toggle('collapsed', !isCollapsed);
-        pinnedSection.classList.toggle('collapsed', !isCollapsed);
-        localStorage.setItem('arcify-pinned-collapsed', (!isCollapsed).toString());
-        updateChevronState(sidebarElement, pinnedSection);
-    });
-
     const pinnedContainer = sidebarElement.querySelector('[data-tab-type="pinned"]');
     const tempContainer = sidebarElement.querySelector('[data-tab-type="temporary"]');
     const placeholderContainer = sidebarElement.querySelector('.placeholder-container');
@@ -946,19 +1190,21 @@ function renderSidebarView(state) {
     });
 
     const popup = sidebarElement.querySelector('.archived-tabs-popup');
-    const archiveButton = sidebarElement.querySelector('.sidebar-button');
+    const archiveButton = sidebarElement.querySelector('#archive-button');
     const sidebarContent = sidebarElement.querySelector('.sidebar-content');
-    archiveButton.addEventListener('click', (e) => {
-        e.stopPropagation();
-        sidebarContent.classList.toggle('hidden');
-        const isVisible = popup.style.opacity == 1;
-        if (isVisible) {
-            popup.classList.toggle('visible');
-        } else {
-            showArchivedTabsPopup();
-            popup.classList.toggle('visible');
-        }
-    });
+    if (archiveButton) {
+        archiveButton.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isVisible = popup.classList.contains('visible');
+            sidebarContent.classList.toggle('hidden', !isVisible);
+            if (isVisible) {
+                popup.classList.remove('visible');
+            } else {
+                showArchivedTabsPopup();
+                popup.classList.add('visible');
+            }
+        });
+    }
 
     tabsView.appendChild(sidebarElement);
 
@@ -1011,6 +1257,8 @@ function calculatePinnedTabIndex(afterElement, position, pinnedFavicons) {
 
 // Helper function to set up drag event listeners for tab elements
 function setupTabDragHandlers(tabElement) {
+    tabElement.draggable = true;
+
     tabElement.addEventListener('dragstart', () => {
         tabElement.classList.add('dragging');
         // Track the source folder (if any) so we can resync collapsed-folder projections after drop.
@@ -1023,10 +1271,118 @@ function setupTabDragHandlers(tabElement) {
     });
 }
 
+function startFolderRename(folderElement, folderItem) {
+    if (!folderElement || !folderItem) {
+        return;
+    }
+
+    const folderTitle = folderElement.querySelector('.folder-title');
+    const folderNameInput = folderElement.querySelector('.folder-name');
+    if (!folderTitle || !folderNameInput) {
+        return;
+    }
+
+    folderTitle.style.display = 'none';
+    folderNameInput.style.display = 'inline-block';
+    folderNameInput.readOnly = false;
+    folderNameInput.disabled = false;
+    folderNameInput.value = folderItem.title || 'Untitled';
+    folderNameInput.select();
+    folderNameInput.focus();
+}
+
+function setupFolderEditHandlers(folderElement, folderItem) {
+    const folderTitle = folderElement.querySelector('.folder-title');
+    const folderNameInput = folderElement.querySelector('.folder-name');
+    if (!folderTitle || !folderNameInput || !folderItem) {
+        return;
+    }
+
+    const finishFolderRename = async (save) => {
+        if (save) {
+            const newName = folderNameInput.value.trim();
+            if (newName) {
+                folderItem.title = newName;
+                const folderItemId = folderElement.dataset.itemId || folderItem.id;
+                if (folderItemId) {
+                    await updatePinnedItemTitleById(folderItemId, newName);
+                }
+            }
+        }
+
+        folderNameInput.value = folderItem.title;
+        folderNameInput.readOnly = true;
+        folderNameInput.disabled = true;
+        folderNameInput.style.display = 'none';
+        folderTitle.innerHTML = folderItem.title;
+        folderTitle.style.display = 'inline';
+    };
+
+    folderNameInput.addEventListener('blur', () => finishFolderRename(true));
+    folderNameInput.addEventListener('keydown', async (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            await finishFolderRename(true);
+            folderNameInput.blur();
+        } else if (e.key === 'Escape') {
+            await finishFolderRename(false);
+            folderNameInput.blur();
+        }
+    });
+}
+
+function setupFolderDragHandlers(folderElement) {
+    const folderHeader = folderElement.querySelector('.folder-header');
+    if (!folderHeader) {
+        return;
+    }
+
+    folderHeader.draggable = true;
+
+    folderHeader.addEventListener('dragstart', (event) => {
+        if (event.target.closest('.folder-toggle, .folder-name')) {
+            event.preventDefault();
+            return;
+        }
+
+        folderElement.classList.add('dragging');
+        dragSourceFolderElement = folderElement.parentElement?.closest('.folder') || null;
+    });
+
+    folderHeader.addEventListener('dragend', () => {
+        folderElement.classList.remove('dragging');
+        dragSourceFolderElement = null;
+    });
+}
+
 // Variables for folder auto-open functionality
 let folderOpenTimer = null;
 let currentHoveredFolder = null;
 let dragSourceFolderElement = null;
+
+function getFolderDropIntent(folderElement, clientY) {
+    if (!folderElement) return null;
+    const header = folderElement.querySelector('.folder-header');
+    if (header) {
+        const headerRect = header.getBoundingClientRect();
+        if (clientY <= headerRect.bottom) {
+            const headerMidpoint = headerRect.top + headerRect.height / 2;
+            return clientY < headerMidpoint ? 'above' : 'below';
+        }
+    }
+
+    const rect = folderElement.getBoundingClientRect();
+    const relativeY = clientY - rect.top;
+    const edgeZone = Math.max(18, Math.min(48, rect.height * 0.35));
+
+    if (relativeY <= edgeZone) {
+        return 'above';
+    }
+    if (relativeY >= rect.height - edgeZone) {
+        return 'below';
+    }
+    return 'inside';
+}
 
 // Helper function to programmatically open a folder
 function openFolder(folderElement) {
@@ -1153,13 +1509,6 @@ async function moveTabToPinned(state, tab) {
     // Track the original pinned URL for Arc-like "Back to Pinned URL" behavior.
     await Utils.setPinnedTabState(tab.id, { pinnedUrl: tab.url, pinnedItemId: pinnedItem.id });
 
-    // Update chevron state after moving tab to pinned
-    const sidebarView = document.querySelector('.sidebar-view');
-    if (sidebarView) {
-        const pinnedContainer = sidebarView.querySelector('[data-tab-type="pinned"]');
-        updateChevronState(sidebarView, pinnedContainer);
-    }
-
     // Update placeholders after moving tab to pinned
     updatePinnedSectionPlaceholders();
 
@@ -1183,13 +1532,6 @@ async function moveTabToTemp(state, tab) {
     await Utils.removePinnedTabState(tab.id);
 
     saveSidebarState();
-
-    // Update chevron state after moving tab from pinned
-    const sidebarView = document.querySelector('.sidebar-view');
-    if (sidebarView) {
-        const pinnedContainer = sidebarView.querySelector('[data-tab-type="pinned"]');
-        updateChevronState(sidebarView, pinnedContainer);
-    }
 
     await reconcileTabOrdering({ source: 'arcify', movedTabId: tab.id });
 }
@@ -1331,19 +1673,48 @@ function updatePinnedSectionPlaceholders() {
 
 // Convert favorite tab (pinned-favicon) to proper tab element
 async function convertFavoriteToTab(draggingElement, targetIsPinned) {
-    const tabId = parseInt(draggingElement.dataset.tabId);
+    const itemId = draggingElement.dataset.itemId || null;
+    const favoriteItem = itemId ? Utils.findPinnedItemById(sidebarState?.pinnedItems || [], itemId)?.item : null;
+    const tabId = draggingElement.dataset.tabId ? parseInt(draggingElement.dataset.tabId) : null;
 
-    // Unpin from Chrome favorites
-    await chrome.tabs.update(tabId, { pinned: false });
+    if (targetIsPinned && favoriteItem?.id) {
+        demoteFavoriteItemToSidebar(favoriteItem.id);
+        saveSidebarState();
+    }
 
-    // Get fresh tab data and create proper UI element
-    const tab = await chrome.tabs.get(tabId);
-    const newTabElement = await createTabElement(tab, targetIsPinned, false);
+    let newTabElement = null;
+    let tab = null;
 
-    // Replace the small favicon with full tab element
-    draggingElement.replaceWith(newTabElement);
+    if (tabId) {
+        tab = await chrome.tabs.get(tabId);
+        if (favoriteItem?.id) {
+            tab.pinnedItemId = favoriteItem.id;
+            tab.pinnedUrl = favoriteItem.url;
+            await Utils.setPinnedTabState(tab.id, {
+                pinnedItemId: favoriteItem.id,
+                pinnedUrl: favoriteItem.url
+            });
+        }
+        newTabElement = await createTabElement(tab, targetIsPinned, false);
+    } else if (targetIsPinned && favoriteItem) {
+        const bookmarkTab = {
+            id: null,
+            title: favoriteItem.title,
+            url: favoriteItem.url,
+            favIconUrl: null,
+            sidebarName: sidebarState?.name,
+            pinnedUrl: favoriteItem.url,
+            pinnedItemId: favoriteItem.id
+        };
+        newTabElement = await createTabElement(bookmarkTab, true, true);
+    }
 
-    // Refresh favorites area to remove the original
+    if (newTabElement) {
+        draggingElement.replaceWith(newTabElement);
+    } else {
+        draggingElement.remove();
+    }
+
     updatePinnedFavicons();
 
     return { tab, newTabElement };
@@ -1466,7 +1837,16 @@ async function handleBookmarkOperations(draggingElement, container, targetFolder
     try {
         if (container.dataset.tabType === 'pinned' && (draggingElement.dataset.tabId || draggingElement.dataset.url)) {
             if (draggingElement.classList.contains('pinned-favicon')) {
-                await convertFavoriteDrop(draggingElement, true);
+                const targetFolderElement = targetFolder ? targetFolder.closest('.folder') : null;
+                const { tab, newTabElement } = await convertFavoriteDrop(draggingElement, true);
+
+                if (targetFolderElement && newTabElement) {
+                    const { tab: droppedTab, isBookmarkOnly } = await getDraggedTab(newTabElement);
+                    if (droppedTab) {
+                        const { pinnedItemId } = await movePinnedItemToFolder(droppedTab, targetFolderElement, newTabElement, isBookmarkOnly);
+                        await attachPinnedItemMetadataToTabElement(newTabElement, droppedTab, pinnedItemId, droppedTab.url);
+                    }
+                }
                 return false;
             }
 
@@ -1523,8 +1903,7 @@ async function handleBookmarkOperations(draggingElement, container, targetFolder
         }
 
         if (draggingElement.classList.contains('pinned-favicon') && draggingElement.dataset.tabId) {
-            const tabId = parseInt(draggingElement.dataset.tabId);
-            await chrome.tabs.update(tabId, { pinned: false });
+            return false;
         }
     } catch (error) {
         Logger.error('Error handling drop operations:', error);
@@ -1678,12 +2057,15 @@ async function setupDragAndDrop(pinnedContainer, tempContainer) {
             e.preventDefault();
             const draggingElement = document.querySelector('.dragging');
             if (draggingElement) {
-                const targetFolder = e.target.closest('.folder-content');
+                const folderElement = container.dataset.tabType === 'pinned' ? e.target.closest('.folder') : null;
+                const folderDropIntent = folderElement ? getFolderDropIntent(folderElement, e.clientY) : null;
+                const targetFolder = folderDropIntent === 'inside'
+                    ? (e.target.closest('.folder-content') || folderElement?.querySelector('.folder-content'))
+                    : null;
                 const targetContainer = targetFolder || container;
 
                 // Check for collapsed folder auto-open functionality
-                const folderElement = e.target.closest('.folder');
-                if (folderElement && folderElement.classList.contains('collapsed')) {
+                if (folderDropIntent === 'inside' && folderElement && folderElement.classList.contains('collapsed')) {
                     // Start timer to auto-open collapsed folder if hovering over it
                     if (currentHoveredFolder !== folderElement) {
                         startFolderOpenTimer(folderElement);
@@ -1694,7 +2076,9 @@ async function setupDragAndDrop(pinnedContainer, tempContainer) {
                 }
 
                 // Get the element we're dragging over to show drop indicator
-                const afterElement = getDragAfterElementTabs(targetContainer, e.clientY);
+                const afterElement = folderDropIntent && folderDropIntent !== 'inside'
+                    ? folderElement
+                    : getDragAfterElementTabs(targetContainer, e.clientY);
                 if (afterElement && targetContainer.contains(afterElement)) {
                     // Check if this is a placeholder (empty container)
                     if (afterElement.classList.contains('tab-placeholder')) {
@@ -1703,7 +2087,9 @@ async function setupDragAndDrop(pinnedContainer, tempContainer) {
                         hideAllDropIndicators(); // Don't show traditional indicators for placeholders
                     } else {
                         // Show traditional drop indicators for actual tabs/folders
-                        const position = getDropPosition(afterElement, e.clientX, e.clientY, false);
+                        const position = folderDropIntent && folderDropIntent !== 'inside'
+                            ? folderDropIntent
+                            : getDropPosition(afterElement, e.clientX, e.clientY, false);
                         showDropIndicator(afterElement, position, false);
                         // Remove any placeholder drag-over state in this container
                         const placeholder = targetContainer.querySelector('.tab-placeholder');
@@ -1747,23 +2133,23 @@ async function setupDragAndDrop(pinnedContainer, tempContainer) {
             const draggingElement = document.querySelector('.dragging');
             if (draggingElement) {
                 const droppedTabId = draggingElement.dataset.tabId ? parseInt(draggingElement.dataset.tabId) : null;
-                // If dropping on a folder header / collapsed folder area, treat it as dropping into that folder.
-                let targetFolder = e.target.closest('.folder-content');
-                let targetFolderElement = targetFolder ? targetFolder.closest('.folder') : null;
+                const folderUnderPointer = container.dataset.tabType === 'pinned' ? e.target.closest('.folder') : null;
+                const folderDropIntent = folderUnderPointer ? getFolderDropIntent(folderUnderPointer, e.clientY) : null;
+                let targetFolder = null;
+                let targetFolderElement = null;
 
-                if (!targetFolder) {
-                    const folderUnderPointer = e.target.closest('.folder');
-                    if (folderUnderPointer) {
-                        openFolder(folderUnderPointer); // ensures folder is expanded and projections are synced
-                        targetFolderElement = folderUnderPointer;
-                        targetFolder = folderUnderPointer.querySelector('.folder-content');
-                    }
+                if (folderDropIntent === 'inside' && folderUnderPointer) {
+                    openFolder(folderUnderPointer); // ensures folder is expanded and projections are synced
+                    targetFolderElement = folderUnderPointer;
+                    targetFolder = e.target.closest('.folder-content') || folderUnderPointer.querySelector('.folder-content');
                 }
 
                 const targetContainer = targetFolder || container;
 
                 // Calculate drop position using same logic as indicators
-                const afterElement = getDragAfterElementTabs(targetContainer, e.clientY);
+                const afterElement = folderDropIntent && folderDropIntent !== 'inside'
+                    ? folderUnderPointer
+                    : getDragAfterElementTabs(targetContainer, e.clientY);
                 if (afterElement && targetContainer.contains(afterElement)) {
                     // Check if this is a placeholder (empty container)
                     if (afterElement.classList.contains('tab-placeholder')) {
@@ -1772,7 +2158,9 @@ async function setupDragAndDrop(pinnedContainer, tempContainer) {
                         afterElement.classList.add('hidden');
                     } else {
                         // Normal positioning logic for actual tabs/folders
-                        const position = getDropPosition(afterElement, e.clientX, e.clientY, false);
+                        const position = folderDropIntent && folderDropIntent !== 'inside'
+                            ? folderDropIntent
+                            : getDropPosition(afterElement, e.clientX, e.clientY, false);
 
                         // Position element based on indicator logic
                         if (position === 'above') {
@@ -1905,6 +2293,7 @@ async function createNewFolder(sidebarView) {
 
     const folderItem = Utils.createPinnedFolderItem({ title: 'Untitled', children: [] });
     folderElement.dataset.itemId = folderItem.id;
+    setupFolderDragHandlers(folderElement);
 
     // Set up initial display for new folder
     folderNameInput.style.display = 'inline-block';
@@ -1920,53 +2309,7 @@ async function createNewFolder(sidebarView) {
         syncCollapsedFolderTabs(folderElement);
     });
 
-    // Set up folder name input
-    folderNameInput.addEventListener('change', async () => {
-        folderItem.title = folderNameInput.value || 'Untitled';
-        saveSidebarState();
-        folderNameInput.style.display = 'none';
-        folderTitle.innerHTML = folderItem.title;
-        folderTitle.style.display = 'inline';
-    });
-
-    // Add double-click functionality for folder name editing (for new folders)
-    folderHeader.addEventListener('dblclick', (e) => {
-        // Prevent dblclick on folder toggle button from triggering rename
-        if (e.target === folderToggle) return;
-
-        folderTitle.style.display = 'none';
-        folderNameInput.style.display = 'inline-block';
-        folderNameInput.readOnly = false;
-        folderNameInput.disabled = false;
-        folderNameInput.select();
-        folderNameInput.focus();
-    });
-
-    const saveOrCancelNewFolderEdit = async (save) => {
-        if (save) {
-            const newName = folderNameInput.value.trim();
-            if (newName) {
-                folderItem.title = newName;
-                saveSidebarState();
-            }
-        }
-        // Update display regardless of save/cancel
-        folderNameInput.style.display = 'none';
-        folderTitle.innerHTML = folderItem.title;
-        folderTitle.style.display = 'inline';
-    };
-
-    folderNameInput.addEventListener('blur', () => saveOrCancelNewFolderEdit(true));
-    folderNameInput.addEventListener('keydown', async (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            await saveOrCancelNewFolderEdit(true);
-            folderNameInput.blur();
-        } else if (e.key === 'Escape') {
-            await saveOrCancelNewFolderEdit(false);
-            folderNameInput.blur();
-        }
-    });
+    setupFolderEditHandlers(folderElement, folderItem);
 
     // Add the new folder to the pinned container
     pinnedContainer.appendChild(folderElement);
@@ -1977,7 +2320,7 @@ async function createNewFolder(sidebarView) {
     saveSidebarState();
 
     // Set up context menu for the new folder
-    setupFolderContextMenu(folderElement, { name: sidebarView.querySelector('.sidebar-name').value });
+    setupFolderContextMenu(folderElement, null, folderItem);
 
     // Ensure new empty folder shows placeholder
     updateFolderPlaceholder(folderElement);
@@ -1996,14 +2339,16 @@ async function loadTabs(state, pinnedContainer, tempContainer) {
     try {
         const tabs = await chrome.tabs.query({ currentWindow: true });
         const pinnedStatesById = await Utils.getPinnedTabStates();
-        const pinnedTabs = await chrome.tabs.query({ pinned: true, currentWindow: true });
-        const pinnedUrls = new Set(pinnedTabs.map(tab => tab.url));
         const processedUrls = new Set();
 
         async function processPinnedItems(items, container) {
             const itemsToRender = items;
 
             for (const item of itemsToRender) {
+                if (isFavoriteItem(item)) {
+                    continue;
+                }
+
                 if (item.type === PINNED_FOLDER_TYPE) {
                     const folderTemplate = document.getElementById('folderTemplate');
                     const newFolder = folderTemplate.content.cloneNode(true);
@@ -2014,6 +2359,7 @@ async function loadTabs(state, pinnedContainer, tempContainer) {
                     const folderContent = folderElement.querySelector('.folder-content');
                     const folderToggle = folderElement.querySelector('.folder-toggle');
                     folderElement.dataset.itemId = item.id;
+                    setupFolderDragHandlers(folderElement);
 
                     setupFolderContextMenu(folderElement, state, item);
 
@@ -2026,43 +2372,7 @@ async function loadTabs(state, pinnedContainer, tempContainer) {
                         syncCollapsedFolderTabs(folderElement);
                     });
 
-                    folderHeader.addEventListener('dblclick', (e) => {
-                        if (e.target === folderToggle) return;
-                        folderTitle.style.display = 'none';
-                        folderNameInput.style.display = 'inline-block';
-                        folderNameInput.readOnly = false;
-                        folderNameInput.disabled = false;
-                        folderNameInput.select();
-                        folderNameInput.focus();
-                    });
-
-                    const saveOrCancelFolderEdit = async (save) => {
-                        if (save) {
-                            const newName = folderNameInput.value.trim();
-                            if (newName && newName !== item.title) {
-                                item.title = newName;
-                                saveSidebarState();
-                            }
-                        }
-                        folderNameInput.value = item.title;
-                        folderNameInput.readOnly = true;
-                        folderNameInput.disabled = true;
-                        folderNameInput.style.display = 'none';
-                        folderTitle.innerHTML = item.title;
-                        folderTitle.style.display = 'inline';
-                    };
-
-                    folderNameInput.addEventListener('blur', () => saveOrCancelFolderEdit(true));
-                    folderNameInput.addEventListener('keydown', async (e) => {
-                        if (e.key === 'Enter') {
-                            e.preventDefault();
-                            await saveOrCancelFolderEdit(true);
-                            folderNameInput.blur();
-                        } else if (e.key === 'Escape') {
-                            await saveOrCancelFolderEdit(false);
-                            folderNameInput.blur();
-                        }
-                    });
+                    setupFolderEditHandlers(folderElement, item);
 
                     folderNameInput.value = item.title;
                     folderNameInput.readOnly = true;
@@ -2078,7 +2388,7 @@ async function loadTabs(state, pinnedContainer, tempContainer) {
                     continue;
                 }
 
-                if (processedUrls.has(item.url) || pinnedUrls.has(item.url)) {
+                if (processedUrls.has(item.url)) {
                     continue;
                 }
 
@@ -2128,6 +2438,9 @@ async function loadTabs(state, pinnedContainer, tempContainer) {
         tabsToLoad.forEach(async tabId => {
             Logger.log("checking", tabId, sidebarState);
             const tab = tabs.find(t => t.id === tabId);
+            if (isFavoriteBackedTab(tabId, pinnedStatesById)) {
+                return;
+            }
             const representedAsPinned = representedPinnedTabIds.has(tabId);
             Logger.log("representedAsPinned", representedAsPinned);
 
@@ -2169,21 +2482,6 @@ async function refreshSidebarUI() {
         }
     } catch (e) {
         Logger.warn('[UIRefresh] Error refreshing sidebar UI:', e);
-    }
-}
-
-// Function to update chevron state based on pinned section visibility
-function updateChevronState(sidebarView, pinnedContainer) {
-    const chevronButton = sidebarView.querySelector('.sidebar-toggle-chevron');
-    const isCollapsed = pinnedContainer.classList.contains('collapsed');
-    if (!chevronButton) {
-        return;
-    }
-
-    if (isCollapsed) {
-        chevronButton.classList.add('collapsed');
-    } else {
-        chevronButton.classList.remove('collapsed');
     }
 }
 
@@ -2232,7 +2530,7 @@ async function closeTab(tabElement, tab, isPinned = false, isBookmarkOnly = fals
         const bookmarkTab = {
             id: null,
             title: displayTitle,
-            url: tab.url,
+            url: pinnedUrl,
             favIconUrl: tab.favIconUrl,
             sidebarName: tab.sidebarName,
             pinnedUrl,
@@ -2246,22 +2544,10 @@ async function closeTab(tabElement, tab, isPinned = false, isBookmarkOnly = fals
         await ensureFallbackTabBeforeClose(tab.id);
         chrome.tabs.remove(tab.id);
 
-        const sidebarView = document.querySelector('.sidebar-view');
-        if (sidebarView) {
-            const pinnedContainer = sidebarView.querySelector('[data-tab-type="pinned"]');
-            updateChevronState(sidebarView, pinnedContainer);
-        }
         return;
     } else {
         await ensureFallbackTabBeforeClose(tab.id);
         chrome.tabs.remove(tab.id);
-    }
-
-    // Update chevron state after closing any tab
-    const sidebarView = document.querySelector('.sidebar-view');
-    if (sidebarView) {
-        const pinnedContainer = sidebarView.querySelector('[data-tab-type="pinned"]');
-        updateChevronState(sidebarView, pinnedContainer);
     }
 }
 
@@ -2271,9 +2557,6 @@ async function createTabElement(tab, isPinned = false, isBookmarkOnly = false) {
     // Get the template and clone it
     const template = document.getElementById('tabTemplate');
     const tabElement = template.content.cloneNode(true).querySelector('.tab');
-
-    // Set up the tab element properties
-    tabElement.draggable = true; // Enable dragging for all tabs (regular and bookmark-only)
 
     if (isBookmarkOnly) {
         tabElement.classList.add('inactive', 'bookmark-only');
@@ -2585,10 +2868,6 @@ async function createTabElement(tab, isPinned = false, isBookmarkOnly = false) {
 
                         if (restoredTab) {
                             // Pin the restored tab if it was originally pinned
-                            if (isPinned) {
-                                await chrome.tabs.update(restoredTab.id, { pinned: true });
-                            }
-
                             // Tab is already active from restore, but ensure it's activated
                             chrome.tabs.update(restoredTab.id, { active: true });
                             activateTabInDOM(restoredTab.id);
@@ -2817,9 +3096,18 @@ function handleTabCreated(tab) {
         Logger.log('Tab created:', tab);
         chrome.tabs.query({ active: true, currentWindow: true }, async () => {
             try {
+                const matchingPendingFavoriteUrl = Array.from(pendingFavoriteOpenUrls).find(url =>
+                    Utils.getPinnedUrlKey(url) === Utils.getPinnedUrlKey(tab.url)
+                );
+                if (matchingPendingFavoriteUrl) {
+                    Logger.log('Skipping temporary-tab insertion for favorite-backed tab:', tab.id);
+                    return;
+                }
+
                 if (sidebarState) {
                     await moveTabInSidebar(tab.id, false, tab.openerTabId);
                 }
+                updatePinnedFavicons();
             } catch (error) {
                 Logger.error('Error handling new tab:', error);
             }
@@ -2844,9 +3132,13 @@ function handleTabUpdate(tabId, changeInfo, tab) {
             return;
         }
 
-        if (changeInfo.pinned !== undefined) {
-            await handlePinnedStateChange(tabId, tab, tabElement, changeInfo.pinned);
-            updatePinnedFavicons();
+        if (tabElement.classList.contains('pinned-favicon')) {
+            if (changeInfo.active !== undefined && changeInfo.active) {
+                activateTabInDOM(tabId);
+            }
+            if (changeInfo.url || changeInfo.favIconUrl || changeInfo.status === 'complete') {
+                updatePinnedFavicons();
+            }
             return;
         }
 
@@ -2858,7 +3150,8 @@ function handleTabUpdate(tabId, changeInfo, tab) {
 
 async function handleTabRemove(tabId) {
     Logger.log('Tab removed:', tabId);
-    await Utils.removePinnedTabState(tabId);
+    const pinnedState = await Utils.getPinnedTabState(tabId);
+    updatePinnedFavicons();
     // Get tab element before removing it
     const tabElement = document.querySelector(`[data-tab-id="${tabId}"]`);
     if (!tabElement) return;
@@ -2876,14 +3169,29 @@ async function handleTabRemove(tabId) {
     const isPinned = sidebarState?.pinnedTabIds.find(id => id === tabId) != null;
     Logger.log("isPinned", isPinned);
 
+    const matchingSavedItem = (() => {
+        const pinnedItemId = tabElement?.dataset?.itemId || pinnedState?.pinnedItemId || null;
+        return pinnedItemId
+            ? Utils.findPinnedItemById(sidebarState?.pinnedItems || [], pinnedItemId)?.item
+            : Utils.findPinnedItemByUrl(sidebarState?.pinnedItems || [], tabElement?.dataset?.pinnedUrl || tabElement?.dataset?.url)?.item;
+    })();
+
     if (isPinned) {
+        if (matchingSavedItem && isFavoriteItem(matchingSavedItem)) {
+            tabElement.removeAttribute('data-tab-id');
+            await Utils.removePinnedTabState(tabId);
+            if (sidebarState) {
+                sidebarState.pinnedTabIds = sidebarState.pinnedTabIds.filter(id => id !== tabId);
+                sidebarState.temporaryTabs = sidebarState.temporaryTabs.filter(id => id !== tabId);
+            }
+            saveSidebarState();
+            updatePinnedFavicons();
+            return;
+        }
+
         // For pinned tabs, convert to bookmark-only element using existing bookmark data
         try {
-            const pinnedState = await Utils.getPinnedTabState(tabId);
-            const pinnedItemId = tabElement?.dataset?.itemId || pinnedState?.pinnedItemId || null;
-            const matchingPinnedItem = pinnedItemId
-                ? Utils.findPinnedItemById(sidebarState?.pinnedItems || [], pinnedItemId)?.item
-                : Utils.findPinnedItemByUrl(sidebarState?.pinnedItems || [], tabElement?.dataset?.pinnedUrl || tabElement?.dataset?.url)?.item;
+            const matchingPinnedItem = matchingSavedItem;
 
             if (!matchingPinnedItem) {
                 Logger.warn('Could not find matching pinned item for closed pinned tab, removing element');
@@ -2921,6 +3229,7 @@ async function handleTabRemove(tabId) {
         sidebarState.temporaryTabs = sidebarState.temporaryTabs.filter(id => id !== tabId);
     }
 
+    await Utils.removePinnedTabState(tabId);
     saveSidebarState();
 
     // Update pinned favicons to show/hide placeholder when last pinned tab is removed
@@ -2981,9 +3290,10 @@ async function processTabMove(tabId, moveInfo) {
             if (!sidebarState) return;
 
             const currentTabs = await chrome.tabs.query({ currentWindow: true });
+            const pinnedStatesById = await Utils.getPinnedTabStates();
             const pinnedSet = new Set(sidebarState.pinnedTabIds ?? []);
             sidebarState.temporaryTabs = currentTabs
-                .filter(t => !t.pinned && !pinnedSet.has(t.id))
+                .filter(t => !t.pinned && !pinnedSet.has(t.id) && !isFavoriteBackedTab(t.id, pinnedStatesById))
                 .map(t => t.id);
             saveSidebarState();
         });
@@ -3009,6 +3319,7 @@ function handleTabActivated(activeInfo) {
         }
 
         activateTabInDOM(activeInfo.tabId);
+        updatePinnedFavicons();
 
         // Arc-like behavior: if this tab is inside a collapsed folder, add it to the folder's shown tabs set.
         // This makes the tab stay visible in the collapsed folder until user manually opens/closes the folder.
@@ -3161,11 +3472,26 @@ function setupFolderContextMenu(folderElement, _state, item = null) {
     folderElement.addEventListener('contextmenu', async (e) => {
         e.preventDefault();
         e.stopPropagation();
+        const existingMenu = document.getElementById('folder-context-menu');
+        if (existingMenu) {
+            existingMenu.remove();
+        }
         const contextMenu = document.createElement('div');
+        contextMenu.id = 'folder-context-menu';
         contextMenu.classList.add('context-menu');
         contextMenu.style.position = 'fixed';
         contextMenu.style.left = `${e.clientX}px`;
         contextMenu.style.top = `${e.clientY}px`;
+
+        const renameOption = document.createElement('div');
+        renameOption.classList.add('context-menu-item');
+        renameOption.textContent = 'Rename';
+        renameOption.addEventListener('click', () => {
+            if (item) {
+                startFolderRename(folderElement, item);
+            }
+            contextMenu.remove();
+        });
 
         const deleteOption = document.createElement('div');
         deleteOption.classList.add('context-menu-item');
@@ -3181,8 +3507,10 @@ function setupFolderContextMenu(folderElement, _state, item = null) {
             contextMenu.remove();
         });
 
+        contextMenu.appendChild(renameOption);
         contextMenu.appendChild(deleteOption);
         document.body.appendChild(contextMenu);
+        Utils.adjustMenuPosition(contextMenu, e.clientX, e.clientY);
 
         // Close context menu when clicking outside
         const closeContextMenu = (e) => {
@@ -3191,6 +3519,8 @@ function setupFolderContextMenu(folderElement, _state, item = null) {
                 document.removeEventListener('click', closeContextMenu);
             }
         };
-        document.addEventListener('click', closeContextMenu);
+        setTimeout(() => {
+            document.addEventListener('click', closeContextMenu);
+        }, 0);
     });
 }

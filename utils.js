@@ -22,6 +22,10 @@ const PINNED_ITEM_TYPES = {
     LINK: 'link',
     FOLDER: 'folder'
 };
+const PINNED_ITEM_PLACEMENTS = {
+    SIDEBAR: 'sidebar',
+    FAVORITE: 'favorite'
+};
 
 function normalizePinnedItems(items) {
     if (!Array.isArray(items)) return [];
@@ -41,11 +45,52 @@ function normalizePinnedItems(items) {
                 normalized.children = normalizePinnedItems(item.children);
             } else {
                 normalized.url = item.url || '';
+                normalized.placement = item.placement === PINNED_ITEM_PLACEMENTS.FAVORITE
+                    ? PINNED_ITEM_PLACEMENTS.FAVORITE
+                    : PINNED_ITEM_PLACEMENTS.SIDEBAR;
             }
 
             return normalized;
         })
         .filter(Boolean);
+}
+
+function normalizeLegacyFavorites(items) {
+    if (!Array.isArray(items)) return [];
+
+    return items
+        .map(item => {
+            if (!item || typeof item !== 'object' || !item.url) return null;
+            return {
+                id: item.id || crypto.randomUUID?.() || `item-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                type: PINNED_ITEM_TYPES.LINK,
+                title: item.title || 'Favorite',
+                url: item.url,
+                placement: PINNED_ITEM_PLACEMENTS.FAVORITE
+            };
+        })
+        .filter(Boolean);
+}
+
+function mergeLegacyFavoritesIntoPinnedItems(pinnedItems, favoriteItems) {
+    const normalizedPinnedItems = normalizePinnedItems(pinnedItems);
+    const normalizedFavorites = normalizeLegacyFavorites(favoriteItems);
+
+    if (normalizedFavorites.length === 0) {
+        return normalizedPinnedItems;
+    }
+
+    const merged = [...normalizedPinnedItems];
+    normalizedFavorites.reverse().forEach(favorite => {
+        const existing = merged.find(item => item?.type === PINNED_ITEM_TYPES.LINK && item.url === favorite.url);
+        if (existing) {
+            existing.placement = PINNED_ITEM_PLACEMENTS.FAVORITE;
+            return;
+        }
+        merged.unshift(favorite);
+    });
+
+    return normalizePinnedItems(merged);
 }
 
 const Utils = {
@@ -111,12 +156,13 @@ const Utils = {
     getSidebarState: async function () {
         const result = await chrome.storage.local.get([SIDEBAR_STATE_KEY]);
         const migrated = result[SIDEBAR_STATE_KEY] || await this.getDefaultSidebarState();
+        const mergedPinnedItems = mergeLegacyFavoritesIntoPinnedItems(migrated?.pinnedItems, migrated?.favoriteItems);
 
         const normalized = {
             ...(await this.getDefaultSidebarState()),
             ...migrated,
             id: MAIN_SIDEBAR_ID,
-            pinnedItems: normalizePinnedItems(migrated?.pinnedItems),
+            pinnedItems: mergedPinnedItems,
             pinnedTabIds: Array.isArray(migrated?.pinnedTabIds) ? migrated.pinnedTabIds : [],
             temporaryTabs: Array.isArray(migrated?.temporaryTabs) ? migrated.temporaryTabs : []
         };
@@ -270,7 +316,8 @@ const Utils = {
             id: id || this.generateUUID(),
             type: PINNED_ITEM_TYPES.LINK,
             title: title || 'Bookmark',
-            url: url || ''
+            url: url || '',
+            placement: PINNED_ITEM_PLACEMENTS.SIDEBAR
         };
     },
 
@@ -285,6 +332,10 @@ const Utils = {
 
     getPinnedItemTypeConstants: function () {
         return { ...PINNED_ITEM_TYPES };
+    },
+
+    getPinnedItemPlacementConstants: function () {
+        return { ...PINNED_ITEM_PLACEMENTS };
     },
 
     removePinnedTabState: async function (tabId) {

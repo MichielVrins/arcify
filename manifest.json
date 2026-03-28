@@ -70,9 +70,6 @@
       "description": "Toggle side panel"
     },
     "quickPinToggle": {
-      "suggested_key": {
-        "default": "Alt+D"
-      },
       "description": "Quick Pin/Unpin Tab"
     },
     "NextTabInCollection": {
@@ -88,13 +85,16 @@
       "description": "Current Tab URL"
     },
     "toggleSpotlightNewTab": {
-      "suggested_key": {
-        "default": "Alt+T"
-      },
       "description": "New Tab"
     },
     "copyCurrentUrl": {
       "description": "Copy current tab URL"
+    },
+    "reloadExtension": {
+      "suggested_key": {
+        "default": "Alt+Shift+R"
+      },
+      "description": "Reload Arcify extension"
     }
   },
   "options_page": "options.html"

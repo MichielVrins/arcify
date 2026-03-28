@@ -45,6 +45,11 @@ export function activateTabInDOM(tabId) {
     if (targetTab) {
         targetTab.classList.add('active');
     }
+
+    const targetFavorite = document.querySelector(`.pinned-favicon[data-tab-id="${tabId}"]`);
+    if (targetFavorite) {
+        targetFavorite.classList.add('active');
+    }
 }
 
 export function applySidebarColor(color) {
@@ -58,7 +63,22 @@ export function applySidebarColor(color) {
     sidebarContainer.style.setProperty('--collection-bg-color-dark', colorDarkValue);
 }
 
-export function showTabContextMenu(x, y, tab, isPinned, isBookmarkOnly, tabElement, closeTab, onReplaceBookmarkUrlWithCurrent = null) {
+export function showTabContextMenu(
+    x,
+    y,
+    tab,
+    isPinned,
+    isBookmarkOnly,
+    tabElement,
+    closeTab,
+    onReplaceBookmarkUrlWithCurrent = null,
+    options = {}
+) {
+    const {
+        showAddToFavorites = true,
+        showPinOption = true
+    } = options;
+
     // Remove any existing context menus
     const existingMenu = document.getElementById('tab-context-menu');
     if (existingMenu) {
@@ -75,16 +95,19 @@ export function showTabContextMenu(x, y, tab, isPinned, isBookmarkOnly, tabEleme
     // --- Menu Items ---
 
     // Only show these options for actual tabs managed by Arcify
-    if (!isBookmarkOnly) {
+    if (!isBookmarkOnly && showAddToFavorites) {
         const addToFavoritesOption = document.createElement('div');
         addToFavoritesOption.className = 'context-menu-item';
         addToFavoritesOption.textContent = 'Add to Favorites';
-        addToFavoritesOption.addEventListener('click', async () => {
-            await chrome.tabs.update(tab.id, { pinned: true });
+        addToFavoritesOption.addEventListener('click', () => {
+            chrome.runtime.sendMessage({ command: 'favoriteTab', tabId: tab.id });
             contextMenu.remove();
         });
         contextMenu.appendChild(addToFavoritesOption);
 
+    }
+
+    if (!isBookmarkOnly && showPinOption) {
         const pinOption = document.createElement('div');
         pinOption.className = 'context-menu-item';
         pinOption.textContent = isPinned ? 'Unpin Tab' : 'Pin Tab';
@@ -94,34 +117,23 @@ export function showTabContextMenu(x, y, tab, isPinned, isBookmarkOnly, tabEleme
         });
         contextMenu.appendChild(pinOption);
 
-        // Arc-like: allow updating the underlying pinned bookmark URL to the current tab URL.
-        if (isPinned && typeof onReplaceBookmarkUrlWithCurrent === 'function') {
-            const replaceBookmarkUrlOption = document.createElement('div');
-            replaceBookmarkUrlOption.className = 'context-menu-item';
-            replaceBookmarkUrlOption.textContent = 'Replace Pinned URL with Current URL';
-            replaceBookmarkUrlOption.addEventListener('click', async () => {
-                try {
-                    await onReplaceBookmarkUrlWithCurrent(tab, tabElement);
-                } catch (e) {
-                    Logger.warn('[ContextMenu] Failed to replace pinned URL with current URL:', e);
-                } finally {
-                    contextMenu.remove();
-                }
-            });
-            contextMenu.appendChild(replaceBookmarkUrlOption);
-        }
     }
 
-    // Archive Tab (Only for active tabs)
-    if (!isBookmarkOnly) {
-        const archiveOption = document.createElement('div');
-        archiveOption.className = 'context-menu-item';
-        archiveOption.textContent = 'Archive Tab';
-        archiveOption.addEventListener('click', async () => {
-            await Utils.archiveTab(tab.id); // Use the utility function
-            contextMenu.remove();
+    // Arc-like: allow updating the underlying pinned bookmark URL to the current tab URL.
+    if (!isBookmarkOnly && isPinned && typeof onReplaceBookmarkUrlWithCurrent === 'function') {
+        const replaceBookmarkUrlOption = document.createElement('div');
+        replaceBookmarkUrlOption.className = 'context-menu-item';
+        replaceBookmarkUrlOption.textContent = 'Replace Pinned URL with Current URL';
+        replaceBookmarkUrlOption.addEventListener('click', async () => {
+            try {
+                await onReplaceBookmarkUrlWithCurrent(tab, tabElement);
+            } catch (e) {
+                Logger.warn('[ContextMenu] Failed to replace pinned URL with current URL:', e);
+            } finally {
+                contextMenu.remove();
+            }
         });
-        contextMenu.appendChild(archiveOption);
+        contextMenu.appendChild(replaceBookmarkUrlOption);
     }
 
     // Close Tab / Remove Bookmark
@@ -144,11 +156,14 @@ export function showTabContextMenu(x, y, tab, isPinned, isBookmarkOnly, tabEleme
     const closeContextMenu = (e) => {
         if (!contextMenu.contains(e.target)) {
             contextMenu.remove();
-            document.removeEventListener('click', closeContextMenu, { capture: true }); // Use capture phase
+            document.removeEventListener('click', closeContextMenu);
         }
     };
-    // Use capture phase to catch clicks before they bubble up
-    document.addEventListener('click', closeContextMenu, { capture: true });
+    // Defer registration so the click that opened the menu doesn't immediately close it,
+    // and let menu item click handlers run before outside-click cleanup.
+    setTimeout(() => {
+        document.addEventListener('click', closeContextMenu);
+    }, 0);
 }
 
 export async function showArchivedTabsPopup() {

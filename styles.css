@@ -106,6 +106,7 @@ h3 {
     height: 48px;
     flex: 1 1 24%;
     border-radius: 8px;
+    transform: skewX(0deg);
     cursor: pointer;
     transition: all 0.2s;
     display: flex;
@@ -211,91 +212,6 @@ h3 {
     flex-direction: column;
     overflow-y: hidden;
     height: 100%;
-}
-
-.collection-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.collection-name-container {
-    display: flex;
-    align-items: center;
-    flex-grow: 1;
-    position: relative;
-    border-radius: 4px;
-    transition: background-color 0.3s ease;
-    margin-left: 8px;
-}
-
-.collection-toggle-chevron {
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 4px;
-    margin-right: 8px;
-    border-radius: 4px;
-    opacity: 0;
-    transition: opacity 0.2s ease, transform 0.2s ease;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    pointer-events: none;
-    width: 0;
-    margin-left: 0;
-    margin-right: 0;
-    padding-left: 0;
-    padding-right: 0;
-    overflow: hidden;
-}
-
-.collection-name-container:hover .collection-toggle-chevron {
-    opacity: 0.7 !important;
-    pointer-events: auto;
-    width: auto;
-    margin-right: 8px;
-    margin-left: 0px;
-    padding-left: 4px;
-    padding-right: 4px;
-}
-
-.collection-name-container:hover .collection-name {
-    margin-left: 2px;
-}
-
-.collection-toggle-chevron:hover {
-    opacity: 1 !important;
-    background-color: rgba(0, 0, 0, 0.1);
-}
-
-.chevron-icon {
-    width: 16px;
-    height: 16px;
-    fill: currentColor;
-    transition: transform 0.2s ease;
-}
-
-.collection-toggle-chevron.collapsed .chevron-icon {
-    transform: rotate(-90deg);
-}
-
-.collection-name {
-    flex-grow: 1;
-    background: none;
-    border: none;
-    font-size: 16px;
-    font-weight: 600;
-    color: #333;
-    padding: 4px 0;
-    border-radius: 4px;
-    opacity: 0.95;
-    transition: margin-left 0.2s ease;
-}
-
-.collection-name:focus {
-    background-color: rgba(255, 255, 255, 0.2);
-    outline: none;
 }
 
 .collection-options-container {
@@ -606,6 +522,15 @@ h3 {
     height: 0;
 }
 
+.sidebar-footer {
+    position: relative;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    margin-top: 12px;
+    min-height: 32px;
+}
+
 .pinned-tabs,
 .temporary-tabs {
     margin-top: 4px;
@@ -738,25 +663,29 @@ h3 {
 }
 
 .tab {
+    margin-bottom: 4px;
+    cursor: pointer;
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+    transform: skewX(0deg);
+}
+
+.tab-surface {
     display: flex;
     align-items: center;
     padding: 4px 12px;
-    margin-bottom: 4px;
     border-radius: 12px;
-    cursor: pointer;
     transition: background-color 0.3s ease;
     background: var(--collection-bg-color, rgba(255, 255, 255, 0.1));
     position: relative;
-    /* font-weight: 600; */
 }
 
-.tab:hover {
+.tab:hover .tab-surface {
     background: var(--collection-bg-color-dark, rgba(255, 255, 255, 0.1));
-    /* make background darker */
-    /* background-color: #bdbdbd; */
 }
 
-.tab.active {
+.tab.active .tab-surface {
     background-color: #ECEFF1;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
@@ -1176,60 +1105,39 @@ h3 {
 }
 
 
-/* Archive Section Styles */
-.archive-section {
-    width: 100%;
-    margin-top: auto;
-    /* Push to the bottom */
-    display: flex;
-    justify-content: flex-start;
-    /* Align button to the left */
-    transition: all 0.2s ease;
-    overflow: hidden;
+.footer-options-container {
+    margin-left: auto;
 }
 
-.sidebar-button {
-    /* General style for buttons like archive */
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: none;
-    border: none;
-    font-size: 20px;
-    /* Adjust icon size */
-    padding: 4px 2px;
-    cursor: pointer;
-    border-radius: 8px;
-    color: #101010bd;
-    /* Adjust icon color */
-    transition: background-color 0.3s ease;
-}
-
-.sidebar-button:hover {
-    background-color: rgba(0, 0, 0, 0.1);
+.footer-options-container .collection-options-dropdown {
+    top: auto;
+    right: 0;
+    bottom: calc(100% + 8px);
 }
 
 .archived-tabs-popup {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 12px);
     display: flex;
-    /* Hidden by default */
     flex-direction: column;
-    height: 0;
     opacity: 0;
-    margin-top: 0;
-    width: 100%;
+    width: min(280px, calc(100vw - 32px));
+    max-height: 280px;
     overflow-y: auto;
     z-index: 0;
-    /* Ensure it's above other elements */
     transition: opacity 0.3s ease;
-    /* padding: 8px; */
-    /* font-size: 13px; */
+    pointer-events: none;
+    padding: 12px;
+    border-radius: 12px;
+    background: #ECEFF1;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
 }
 
 .archived-tabs-popup.visible {
     opacity: 1;
     z-index: 2;
-    height: 100%;
-    margin-top: 12px;
+    pointer-events: auto;
 }
 
 .archived-tabs-list {
@@ -1566,6 +1474,37 @@ h3 {
     bottom: -6px;
 }
 
+/* Folders clip overflow, so render root-level above/below indicators inside their edge. */
+.tabs-container[data-tab-type="pinned"] > .tab.drop-indicator-horizontal.above::before,
+.folder.drop-indicator-horizontal.above::before {
+    top: 0;
+    left: 8px;
+    right: 8px;
+    height: 2px;
+    background-color: var(--chrome-blue-color);
+    opacity: 0.95;
+}
+
+.tabs-container[data-tab-type="pinned"] > .tab.drop-indicator-horizontal.above::after,
+.folder.drop-indicator-horizontal.above::after {
+    display: none;
+}
+
+.tabs-container[data-tab-type="pinned"] > .tab.drop-indicator-horizontal.below::before,
+.folder.drop-indicator-horizontal.below::before {
+    bottom: 0;
+    left: 8px;
+    right: 8px;
+    height: 2px;
+    background-color: var(--chrome-blue-color);
+    opacity: 0.95;
+}
+
+.tabs-container[data-tab-type="pinned"] > .tab.drop-indicator-horizontal.below::after,
+.folder.drop-indicator-horizontal.below::after {
+    display: none;
+}
+
 .drop-indicator-vertical {
     position: relative;
 }
@@ -1679,7 +1618,7 @@ h3 {
 }
 
 .pinned-placeholder-container {
-    padding: 8px 16px;
+    padding: 4px 16px 8px;
     text-align: center;
     width: 100%;
     transition: background-color 0.2s ease;
@@ -1698,50 +1637,10 @@ h3 {
 }
 
 .pinned-tab-placeholder {
-    color: rgba(0, 0, 0, 0.5);
-    padding: 20px;
+    min-height: 24px;
     border: 2px dashed rgba(0, 0, 0, 0.1);
-    border-radius: 8px;
-    background: var(--sidebar-secondary-bg, rgba(0, 0, 0, 0.02));
-    text-align: center;
-    position: relative;
-}
-
-.placeholder-close-btn {
-    position: absolute;
-    top: 4px;
-    right: 4px;
-    background: none;
-    border: none;
-    color: rgba(0, 0, 0, 0.5);
-    font-size: 20px;
-    cursor: pointer;
-    padding: 4px;
-    line-height: 1;
-    border-radius: 50%;
-    width: 24px;
-    height: 24px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.placeholder-close-btn:hover {
-    color: var(--sidebar-text-color, #333);
-    background-color: var(--tab-hover-bg, rgba(0, 0, 0, 0.05));
-}
-
-.placeholder-title {
-    font-weight: 600;
-    font-size: 14px;
-    margin-bottom: 4px;
-}
-
-.placeholder-subtitle {
-    font-size: 12px;
-    max-width: 200px;
-    margin: 0 auto;
-    line-height: 1.4;
+    border-radius: 999px;
+    background: transparent;
 }
 
 /* Dark mode support */
@@ -1775,18 +1674,6 @@ h3 {
 
     h3 {
         color: #ECEFF1;
-    }
-
-    .collection-name {
-        color: #ECEFF1;
-    }
-
-    .collection-toggle-chevron {
-        color: #ECEFF1;
-    }
-
-    .collection-toggle-chevron:hover {
-        background-color: rgba(255, 255, 255, 0.1);
     }
 
     .collection-options {
@@ -1841,12 +1728,9 @@ h3 {
         color: rgba(255, 255, 255, 0.8);
     }
 
-    .sidebar-button {
-        color: rgba(255, 255, 255, 0.8);
-    }
-
-    .sidebar-button:hover {
-        background-color: rgba(255, 255, 255, 0.1);
+    .archived-tabs-popup {
+        background: #263238;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
     }
 
     .archived-tabs-list .archived-tab-item {
@@ -1878,18 +1762,9 @@ h3 {
     }
 
     .pinned-tab-placeholder {
-        color: rgba(255, 255, 255, 0.5);
+        min-height: 20px;
         border: 2px dashed rgba(255, 255, 255, 0.2);
-        background: rgba(255, 255, 255, 0.05);
-    }
-
-    .placeholder-close-btn {
-        color: rgba(255, 255, 255, 0.5);
-    }
-
-    .placeholder-close-btn:hover {
-        color: #ECEFF1;
-        background-color: rgba(255, 255, 255, 0.1);
+        background: transparent;
     }
 
     /* Spotlight dialog dark mode */
@@ -1931,13 +1806,4 @@ h3 {
     .color-swatch.selected {
         border-color: rgba(255, 255, 255, 0.5);
     }
-}
-
-.collection-header-spacer {
-    flex: 1;
-}
-
-.collection-actions {
-    display: flex;
-    align-items: center;
 }

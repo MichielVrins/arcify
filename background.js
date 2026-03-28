@@ -56,8 +56,6 @@ chrome.runtime.onInstalled.addListener(async (details) => {
         if (!result.onboardingCompleted) {
             chrome.tabs.create({ url: 'installation-onboarding.html', active: true });
         }
-    } else if (details.reason === 'update') {
-        chrome.tabs.create({ url: 'installation-onboarding.html', active: true });
     }
 
     if (chrome.contextMenus) {
@@ -113,6 +111,8 @@ chrome.commands.onCommand.addListener(async function (command) {
         await injectSpotlightScript(SpotlightTabMode.NEW_TAB);
     } else if (command === "copyCurrentUrl") {
         await copyCurrentTabUrlWithFallback();
+    } else if (command === "reloadExtension") {
+        chrome.runtime.reload();
     }
 });
 
