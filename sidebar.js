@@ -1260,52 +1260,100 @@ async function convertFavoriteToTab(draggingElement, targetIsPinned) {
     return { tab, newTabElement };
 }
 
-// Handle bookmark operations during drop events
-async function handleBookmarkOperations(event, draggingElement, container, targetFolder) {
-    // Validate required elements exist
-    if (!draggingElement || !container || !event) {
+function getDraggedTabSnapshot(draggingElement) {
+    const isBookmarkOnly = !draggingElement.dataset.tabId && draggingElement.dataset.url;
+    if (!isBookmarkOnly) return null;
+
+    const titleElement = draggingElement.querySelector('.tab-title-display');
+    return {
+        id: null,
+        url: draggingElement.dataset.url,
+        title: titleElement ? titleElement.textContent : 'Untitled',
+        favIconUrl: null
+    };
+}
+
+async function getDraggedTab(draggingElement) {
+    if (!draggingElement?.dataset?.tabId) {
+        return {
+            tab: getDraggedTabSnapshot(draggingElement),
+            tabId: null,
+            isBookmarkOnly: true
+        };
+    }
+
+    const tabId = parseInt(draggingElement.dataset.tabId);
+    const tab = await chrome.tabs.get(tabId);
+    return { tab, tabId, isBookmarkOnly: false };
+}
+
+async function ensureFolderBookmark(folderElement, tab, draggingElement, isBookmarkOnly) {
+    const bookmarkRoot = await getBookmarkRootFolder();
+    if (!bookmarkRoot) return;
+
+    const folderName = folderElement.querySelector('.folder-name').value;
+    const existingFolders = await chrome.bookmarks.getChildren(bookmarkRoot.id);
+    let folder = existingFolders.find(f => f.title === folderName);
+    if (!folder) {
+        folder = await chrome.bookmarks.create({
+            parentId: bookmarkRoot.id,
+            title: folderName
+        });
+    }
+
+    const existingBookmarks = await chrome.bookmarks.getChildren(folder.id);
+    const bookmarkAlreadyInTarget = Boolean(BookmarkUtils.findBookmarkByUrl(existingBookmarks, tab.url));
+
+    const targetFolderContentEl = folderElement.querySelector('.folder-content');
+    if (targetFolderContentEl && !isBookmarkOnly && tab?.url) {
+        const esc = (s) => (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(s) : s.replace(/"/g, '\\"');
+        const dupe = targetFolderContentEl.querySelector(`.tab.bookmark-only[data-url="${esc(tab.url)}"]`);
+        if (dupe && dupe !== draggingElement) {
+            dupe.remove();
+        }
+    }
+
+    if (!bookmarkAlreadyInTarget) {
+        await BookmarkUtils.removeBookmarkByUrl(bookmarkRoot.id, tab.url);
+        await chrome.bookmarks.create({
+            parentId: folder.id,
+            title: tab.title,
+            url: tab.url
+        });
+    }
+
+    updateFolderPlaceholder(folderElement);
+}
+
+async function pinDroppedLiveTab(state, tab) {
+    await moveTabToPinned(state, tab);
+    saveSidebarState();
+}
+
+async function movePinnedItemToFolder(tab, targetFolderElement, draggingElement, isBookmarkOnly) {
+    await ensureFolderBookmark(targetFolderElement, tab, draggingElement, isBookmarkOnly);
+    saveSidebarState();
+}
+
+async function moveTabToTemporary(state, tab) {
+    await moveTabToTemp(state, tab);
+}
+
+async function convertFavoriteDrop(draggingElement, targetIsPinned) {
+    return convertFavoriteToTab(draggingElement, targetIsPinned);
+}
+
+// Apply bookmark/state mutations after the drop handler has already positioned the DOM.
+async function handleBookmarkOperations(draggingElement, container, targetFolder) {
+    if (!draggingElement || !container) {
         Logger.warn('Missing required elements for bookmark operations');
         return;
     }
 
-    // Handle tab being moved to pinned section or folder (both open tabs and bookmark-only tabs)
-    if (container.dataset.tabType === 'pinned' && (draggingElement.dataset.tabId || draggingElement.dataset.url)) {
-        // Handle favorite tab conversion
-        if (draggingElement.classList.contains('pinned-favicon')) {
-            await convertFavoriteToTab(draggingElement, true);
-            return; // Exit early, conversion complete
-        }
-
-        Logger.log("Tab dropped to pinned section or folder");
-
-        // Determine if this is a bookmark-only tab or a regular tab
-        const isBookmarkOnly = !draggingElement.dataset.tabId && draggingElement.dataset.url;
-        Logger.log("Processing drag drop - isBookmarkOnly:", isBookmarkOnly);
-
-        try {
-            let tab;
-            let tabId;
-
-            if (isBookmarkOnly) {
-                // For bookmark-only tabs, create a synthetic tab object from DOM data
-                const titleElement = draggingElement.querySelector('.tab-title-display');
-                tab = {
-                    id: null,
-                    url: draggingElement.dataset.url,
-                    title: titleElement ? titleElement.textContent : 'Untitled',
-                    favIconUrl: null
-                };
-                tabId = null;
-                Logger.log("Created synthetic tab object for bookmark-only:", tab);
-            } else {
-                // For regular tabs, fetch the actual tab object
-                tabId = parseInt(draggingElement.dataset.tabId);
-                tab = await chrome.tabs.get(tabId);
-                Logger.log("Fetched real tab object:", tab);
-            }
-            const sidebarView = container.closest('.sidebar-view');
-            if (!sidebarView) {
-                Logger.error('Could not find parent sidebar element');
+    try {
+        if (container.dataset.tabType === 'pinned' && (draggingElement.dataset.tabId || draggingElement.dataset.url)) {
+            if (draggingElement.classList.contains('pinned-favicon')) {
+                await convertFavoriteDrop(draggingElement, true);
                 return;
             }
 
@@ -1315,127 +1363,58 @@ async function handleBookmarkOperations(event, draggingElement, container, targe
                 return;
             }
 
+            const { tab, tabId, isBookmarkOnly } = await getDraggedTab(draggingElement);
             if (!tab) {
                 Logger.error(`Tab not found for ID: ${tabId}`);
                 return;
             }
 
-            if (!isBookmarkOnly && tabId) {
-                state.temporaryTabs = state.temporaryTabs.filter(id => id !== tabId);
-                if (!state.pinnedTabIds.includes(tabId)) {
-                    state.pinnedTabIds.push(tabId);
-                }
-                Logger.log("Updated sidebar state for regular tab:", tabId);
-            } else {
-                Logger.log("Skipping sidebar state update for bookmark-only tab");
-            }
-
-            // Determine the target folder
             const targetFolderElement = targetFolder ? targetFolder.closest('.folder') : null;
-
-            // Add to bookmarks if URL doesn't exist
-            const bookmarkRoot = await getBookmarkRootFolder();
-            if (bookmarkRoot) {
-                let parentId = bookmarkRoot.id;
-                if (targetFolderElement) {
-                    Logger.log("moving into a folder");
-                    const folderName = targetFolderElement.querySelector('.folder-name').value;
-                    const existingFolders = await chrome.bookmarks.getChildren(bookmarkRoot.id);
-                    let folder = existingFolders.find(f => f.title === folderName);
-                    if (!folder) {
-                        folder = await chrome.bookmarks.create({
-                            parentId: bookmarkRoot.id,
-                            title: folderName
-                        });
+            if (targetFolderElement) {
+                await movePinnedItemToFolder(tab, targetFolderElement, draggingElement, isBookmarkOnly);
+                if (!isBookmarkOnly && tabId) {
+                    state.temporaryTabs = state.temporaryTabs.filter(id => id !== tabId);
+                    if (!state.pinnedTabIds.includes(tabId)) {
+                        state.pinnedTabIds.push(tabId);
                     }
-                    parentId = folder.id;
-
-                    // Check if bookmark already exists in the target folder
-                    const existingBookmarks = await chrome.bookmarks.getChildren(parentId);
-                    const bookmarkAlreadyInTarget = Boolean(BookmarkUtils.findBookmarkByUrl(existingBookmarks, tab.url));
-                    if (bookmarkAlreadyInTarget) {
-                        Logger.log('Bookmark already exists in folder:', folderName);
-                    }
-
-                    // Ensure we don't show duplicate UI entries for the same URL inside the folder:
-                    // if the folder already has a bookmark-only item for this URL, remove it when dropping an open tab.
-                    const targetFolderContentEl = targetFolderElement.querySelector('.folder-content');
-                    if (targetFolderContentEl && !isBookmarkOnly && tab?.url) {
-                        const esc = (s) => (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(s) : s.replace(/"/g, '\\"');
-                        const dupe = targetFolderContentEl.querySelector(`.tab.bookmark-only[data-url="${esc(tab.url)}"]`);
-                        if (dupe && dupe !== draggingElement) {
-                            dupe.remove();
-                        }
-                    }
-
-                    // Only move the bookmark in Chrome bookmarks if it's not already in the target folder.
-                    if (!bookmarkAlreadyInTarget) {
-                        // Find and remove the bookmark from its original location
-                        await BookmarkUtils.removeBookmarkByUrl(bookmarkRoot.id, tab.url);
-
-                        // Create the bookmark in the new location
-                        await chrome.bookmarks.create({
-                            parentId: parentId,
-                            title: tab.title,
-                            url: tab.url
-                        });
-                    }
-
-                    // Keep folder placeholder state accurate (DOM was already positioned by drop handler).
-                    updateFolderPlaceholder(targetFolderElement);
-                } else {
-                    await moveTabToPinned(state, tab);
+                    saveSidebarState();
                 }
+                return;
             }
 
-            saveSidebarState();
-
-            // Update all folder placeholders after bookmark operations
-            updatePinnedSectionPlaceholders();
-        } catch (error) {
-            Logger.error('Error handling pinned tab drop:', error);
-            // Update placeholders even if there was an error
-            updatePinnedSectionPlaceholders();
-        }
-    } else if (container.dataset.tabType === 'temporary' && draggingElement.dataset.tabId) {
-        // Handle favorite tab conversion
-        if (draggingElement.classList.contains('pinned-favicon')) {
-            const { tab } = await convertFavoriteToTab(draggingElement, false);
-            const state = sidebarState;
-            if (state) moveTabToTemp(state, tab);
-            return; // Exit early, conversion complete
+            if (!isBookmarkOnly) {
+                await pinDroppedLiveTab(state, tab);
+            }
+            return;
         }
 
-        Logger.log("Tab dropped to temporary section");
-        const tabId = parseInt(draggingElement.dataset.tabId);
+        if (container.dataset.tabType === 'temporary' && draggingElement.dataset.tabId) {
+            if (draggingElement.classList.contains('pinned-favicon')) {
+                const { tab } = await convertFavoriteDrop(draggingElement, false);
+                const state = sidebarState;
+                if (state) {
+                    await moveTabToTemporary(state, tab);
+                }
+                return;
+            }
 
-        try {
+            const tabId = parseInt(draggingElement.dataset.tabId);
             const tab = await chrome.tabs.get(tabId);
             const state = sidebarState;
             if (state && tab) {
-                moveTabToTemp(state, tab);
-
-                // Update all folder placeholders after removing bookmark
-                updatePinnedSectionPlaceholders();
+                await moveTabToTemporary(state, tab);
             }
-        } catch (error) {
-            Logger.error('Error handling temporary tab drop:', error);
-            // Update placeholders even if there was an error
-            updatePinnedSectionPlaceholders();
+            return;
         }
-    } else if (draggingElement && draggingElement.classList.contains('pinned-favicon') && draggingElement.dataset.tabId) {
-        const tabId = parseInt(draggingElement.dataset.tabId);
-        try {
-            // 1. Unpin the tab from Chrome favorites
-            await chrome.tabs.update(tabId, { pinned: false });
 
-            // Update all folder placeholders after conversion
-            updatePinnedSectionPlaceholders();
-        } catch (error) {
-            Logger.error('Error converting favorite tab to regular tab:', error);
-            // Update placeholders even if there was an error
-            updatePinnedSectionPlaceholders();
+        if (draggingElement.classList.contains('pinned-favicon') && draggingElement.dataset.tabId) {
+            const tabId = parseInt(draggingElement.dataset.tabId);
+            await chrome.tabs.update(tabId, { pinned: false });
         }
+    } catch (error) {
+        Logger.error('Error handling drop operations:', error);
+    } finally {
+        updatePinnedSectionPlaceholders();
     }
 }
 
@@ -1646,7 +1625,7 @@ async function setupDragAndDrop(pinnedContainer, tempContainer) {
                 }
 
                 // Handle bookmark operations after DOM positioning is complete
-                await handleBookmarkOperations(e, draggingElement, container, targetFolder);
+                await handleBookmarkOperations(draggingElement, container, targetFolder);
 
                 // Resync collapsed-folder projections/icons after move (source + destination)
                 if (dragSourceFolderElement) {
