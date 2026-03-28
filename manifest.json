@@ -5,6 +5,7 @@
   "description": "A sidebar extension that replicates Arc browser's tab management system",
   "permissions": [
     "tabs",
+    "activeTab",
     "tabGroups",
     "sidePanel",
     "storage",
@@ -17,6 +18,9 @@
     "topSites",
     "history",
     "clipboardWrite"
+  ],
+  "host_permissions": [
+    "<all_urls>"
   ],
   "side_panel": {
     "default_path": "sidebar.html"
@@ -89,6 +93,12 @@
     },
     "copyCurrentUrl": {
       "description": "Copy current tab URL"
+    },
+    "recentTabSwitcher": {
+      "suggested_key": {
+        "default": "Alt+Tab"
+      },
+      "description": "Switch tabs in recent order"
     },
     "reloadExtension": {
       "suggested_key": {

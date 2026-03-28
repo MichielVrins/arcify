@@ -28,6 +28,11 @@ const backgroundSearchEngine = new SearchEngine(new BackgroundDataProvider());
 
 const AUTO_ARCHIVE_ALARM_NAME = 'autoArchiveTabsAlarm';
 const TAB_ACTIVITY_STORAGE_KEY = 'tabLastActivity'; // Key to store timestamps
+const TAB_SWITCHER_SESSION_TIMEOUT_MS = 1400;
+const TAB_SWITCHER_HISTORY_LIMIT = 7;
+let tabSwitcherSession = null;
+const tabPreviewCache = new Map();
+const pendingTabSwitcherHideTimers = new Map();
 
 // Helper to handle async message responses with consistent error handling
 function handleAsyncMessage(handler, sendResponse, errorContext, defaultErrorData = {}) {
@@ -89,6 +94,8 @@ chrome.commands.onCommand.addListener(async function (command) {
     if (command === "quickPinToggle") {
         // Send a message to the sidebar
         chrome.runtime.sendMessage({ command: "quickPinToggle" });
+    } else if (command === "recentTabSwitcher") {
+        await switchRecentTab();
     } else if (command === "NextTabInCollection") {
         Utils.findActiveSidebarTab().then(async ({ state, tab } = {}) => {
             if (state) {
@@ -115,6 +122,261 @@ chrome.commands.onCommand.addListener(async function (command) {
         chrome.runtime.reload();
     }
 });
+
+function resetTabSwitcherSession() {
+    if (tabSwitcherSession?.timeoutId) {
+        clearTimeout(tabSwitcherSession.timeoutId);
+    }
+    tabSwitcherSession = null;
+}
+
+function scheduleTabSwitcherSessionReset() {
+    if (!tabSwitcherSession) {
+        return;
+    }
+
+    if (tabSwitcherSession.timeoutId) {
+        clearTimeout(tabSwitcherSession.timeoutId);
+    }
+
+    tabSwitcherSession.timeoutId = setTimeout(() => {
+        tabSwitcherSession = null;
+    }, TAB_SWITCHER_SESSION_TIMEOUT_MS);
+}
+
+async function getRecentTabsForWindow(windowId, activeTabId) {
+    const tabs = await chrome.tabs.query({ windowId });
+    const storage = await chrome.storage.local.get([TAB_ACTIVITY_STORAGE_KEY]);
+    const activityData = storage[TAB_ACTIVITY_STORAGE_KEY] || {};
+
+    return tabs
+        .filter(tab => tab.id && tab.url && tab.title)
+        .sort((a, b) => {
+            if (a.id === activeTabId) return -1;
+            if (b.id === activeTabId) return 1;
+            return (activityData[b.id] || 0) - (activityData[a.id] || 0);
+        });
+}
+
+async function captureActiveTabPreview(windowId) {
+    try {
+        const dataUrl = await chrome.tabs.captureVisibleTab(windowId, {
+            format: 'jpeg',
+            quality: 45
+        });
+        const [activeTab] = await chrome.tabs.query({ active: true, windowId });
+        if (activeTab?.id && dataUrl) {
+            tabPreviewCache.set(activeTab.id, dataUrl);
+        }
+    } catch (error) {
+        Logger.log('[Background] Could not capture tab preview for switcher:', error);
+    }
+}
+
+async function showTabSwitcherOverlay(targetTabId, tabs, selectedTabId) {
+    const targetTab = tabs.find(tab => tab.id === targetTabId);
+    if (!targetTab || !supportsContentScripts(targetTab.url)) {
+        return;
+    }
+
+    const pendingHideTimer = pendingTabSwitcherHideTimers.get(targetTabId);
+    if (pendingHideTimer) {
+        clearTimeout(pendingHideTimer);
+        pendingTabSwitcherHideTimers.delete(targetTabId);
+    }
+
+    const overlayTabs = tabs.slice(0, TAB_SWITCHER_HISTORY_LIMIT).map(tab => ({
+        id: tab.id,
+        title: tab.title,
+        url: tab.url,
+        favIconUrl: tab.favIconUrl || null,
+        previewDataUrl: tabPreviewCache.get(tab.id) || null
+    }));
+
+    await chrome.scripting.executeScript({
+        target: { tabId: targetTabId },
+        func: (overlayItems, currentSelectedTabId) => {
+                let container = document.getElementById('arcify-tab-switcher');
+                if (!container) {
+                    container = document.createElement('div');
+                    container.id = 'arcify-tab-switcher';
+                    container.style.cssText = `
+                        position: fixed;
+                        inset: 0;
+                        pointer-events: none;
+                        z-index: 2147483647;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                    `;
+                    document.documentElement.appendChild(container);
+                }
+
+                const escapeHtml = (value = '') => value
+                    .replaceAll('&', '&amp;')
+                    .replaceAll('<', '&lt;')
+                    .replaceAll('>', '&gt;')
+                    .replaceAll('"', '&quot;')
+                    .replaceAll("'", '&#39;');
+
+                const cards = overlayItems.map(tab => {
+                    const isSelected = tab.id === currentSelectedTabId;
+                    const faviconUrl = tab.favIconUrl || `https://www.google.com/s2/favicons?domain=${encodeURIComponent(tab.url || '')}&sz=32`;
+                    const previewMarkup = tab.previewDataUrl
+                        ? `<div style="height: 108px; border-radius: 12px; overflow: hidden; background: #1f1f1f; margin-bottom: 10px;">
+                                <img src="${tab.previewDataUrl}" alt="" style="width: 100%; height: 100%; object-fit: cover; display: block;">
+                           </div>`
+                        : `<div style="height: 108px; border-radius: 12px; background: linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.02)); margin-bottom: 10px; display:flex; align-items:center; justify-content:center;">
+                                <img src="${faviconUrl}" alt="" style="width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;">
+                           </div>`;
+                    return `
+                        <div style="
+                            width: 220px;
+                            border-radius: 18px;
+                            padding: 12px;
+                            background: ${isSelected ? 'rgba(56, 189, 248, 0.2)' : 'rgba(26, 26, 26, 0.92)'};
+                            border: 1px solid ${isSelected ? 'rgba(56, 189, 248, 0.6)' : 'rgba(255,255,255,0.08)'};
+                            box-shadow: ${isSelected ? '0 16px 40px rgba(14, 165, 233, 0.18)' : '0 12px 32px rgba(0,0,0,0.35)'};
+                            color: white;
+                            backdrop-filter: blur(18px);
+                        ">
+                            ${previewMarkup}
+                            <div style="display:flex; align-items:center; gap: 10px;">
+                                <img src="${faviconUrl}" alt="" style="width:16px; height:16px; border-radius:4px; flex-shrink:0;">
+                                <div style="min-width:0;">
+                                    <div style="font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(tab.title || 'Untitled')}</div>
+                                    <div style="font-size: 11px; color: rgba(255,255,255,.65); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(tab.url || '')}</div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                container.innerHTML = `
+                    <div style="
+                        display:flex;
+                        gap: 14px;
+                        align-items: stretch;
+                        justify-content: center;
+                        max-width: min(92vw, 1120px);
+                        padding: 18px;
+                    ">
+                        ${cards}
+                    </div>
+                `;
+
+                if (window.arcifyTabSwitcherHideTimer) {
+                    clearTimeout(window.arcifyTabSwitcherHideTimer);
+                }
+
+                window.arcifyTabSwitcherHideTimer = setTimeout(() => {
+                    document.getElementById('arcify-tab-switcher')?.remove();
+                    window.arcifyTabSwitcherHideTimer = null;
+                }, 1300);
+        },
+        args: [overlayTabs, selectedTabId]
+    });
+}
+
+async function showTabSwitcherOverlayWithRetry(tabId, tabs, selectedTabId, retries = 2) {
+    if (!tabId) {
+        return;
+    }
+
+    try {
+        await showTabSwitcherOverlay(tabId, tabs, selectedTabId);
+    } catch (error) {
+        if (retries <= 0) {
+            throw error;
+        }
+        await new Promise(resolve => setTimeout(resolve, 120));
+        await showTabSwitcherOverlayWithRetry(tabId, tabs, selectedTabId, retries - 1);
+    }
+}
+
+async function hideTabSwitcherOverlay(tabId) {
+    if (!tabId) {
+        return;
+    }
+
+    const pendingHideTimer = pendingTabSwitcherHideTimers.get(tabId);
+    if (pendingHideTimer) {
+        clearTimeout(pendingHideTimer);
+        pendingTabSwitcherHideTimers.delete(tabId);
+    }
+
+    try {
+        const tab = await chrome.tabs.get(tabId);
+        if (!supportsContentScripts(tab?.url)) {
+            return;
+        }
+        await chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => {
+                if (window.arcifyTabSwitcherHideTimer) {
+                    clearTimeout(window.arcifyTabSwitcherHideTimer);
+                    window.arcifyTabSwitcherHideTimer = null;
+                }
+                document.getElementById('arcify-tab-switcher')?.remove();
+            }
+        });
+    } catch (error) {
+        Logger.log('[Background] Could not hide tab switcher overlay:', error);
+    }
+}
+
+async function switchRecentTab() {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!activeTab?.id || !activeTab.windowId) {
+        return;
+    }
+
+    await captureActiveTabPreview(activeTab.windowId);
+
+    let sessionTabs = tabSwitcherSession?.tabs || null;
+    if (!tabSwitcherSession || tabSwitcherSession.windowId !== activeTab.windowId) {
+        sessionTabs = (await getRecentTabsForWindow(activeTab.windowId, activeTab.id))
+            .slice(0, TAB_SWITCHER_HISTORY_LIMIT);
+        if (sessionTabs.length < 2) {
+            return;
+        }
+
+        tabSwitcherSession = {
+            windowId: activeTab.windowId,
+            tabs: sessionTabs,
+            currentIndex: 1,
+            timeoutId: null
+        };
+    } else {
+        sessionTabs = tabSwitcherSession.tabs || [];
+        if (sessionTabs.length < 2) {
+            resetTabSwitcherSession();
+            return;
+        }
+        tabSwitcherSession.currentIndex = (tabSwitcherSession.currentIndex + 1) % sessionTabs.length;
+    }
+
+    scheduleTabSwitcherSessionReset();
+
+    const targetTabId = tabSwitcherSession.tabs[tabSwitcherSession.currentIndex]?.id;
+    const targetTab = sessionTabs.find(tab => tab.id === targetTabId);
+    if (!targetTab) {
+        return;
+    }
+
+    await showTabSwitcherOverlayWithRetry(activeTab.id, sessionTabs, targetTab.id);
+    await chrome.tabs.update(targetTab.id, { active: true });
+    await chrome.windows.update(targetTab.windowId, { focused: true });
+    await new Promise(resolve => setTimeout(resolve, 80));
+    await showTabSwitcherOverlayWithRetry(targetTab.id, sessionTabs, targetTab.id);
+    if (activeTab.id !== targetTab.id) {
+        const hideTimer = setTimeout(() => {
+            pendingTabSwitcherHideTimers.delete(activeTab.id);
+            hideTabSwitcherOverlay(activeTab.id);
+        }, 150);
+        pendingTabSwitcherHideTimers.set(activeTab.id, hideTimer);
+    }
+}
 
 // Track tabs that have spotlight open for efficient closing.
 // Mainly used to close spotlight overlays in all tabs when it's
