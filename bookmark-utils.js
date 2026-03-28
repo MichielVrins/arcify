@@ -217,24 +217,22 @@ export const BookmarkUtils = {
      * @param {Object} bookmarkData - Bookmark data object
      * @param {string} bookmarkData.url - Bookmark URL
      * @param {string} bookmarkData.title - Bookmark title
-     * @param {string} bookmarkData.spaceName - Space name the bookmark belongs to
-     * @param {number} targetSpaceId - Space ID to open the tab in
+     * @param {string} bookmarkData.sidebarName - Sidebar name the bookmark belongs to
      * @param {HTMLElement} replaceElement - DOM element to replace with active tab element (optional)
      * @param {Object} context - Context object with required functions and data
      * @returns {Object} The created Chrome tab object
      */
-    async openBookmarkAsTab(bookmarkData, targetSpaceId, replaceElement = null, context, isPinned) {
+    async openBookmarkAsTab(bookmarkData, replaceElement = null, context, isPinned) {
         const {
-            spaces,
+            sidebarState,
             currentWindow,
-            saveSpaces,
+            saveSidebarState,
             createTabElement,
             activateTabInDOM,
-            Utils,
-            reconcileSpaceTabOrdering
+            Utils
         } = context;
 
-        Logger.log('[BookmarkUtils] Opening bookmark as tab:', bookmarkData.url, targetSpaceId);
+        Logger.log('[BookmarkUtils] Opening bookmark as tab:', bookmarkData.url);
 
         // Create new tab with bookmark URL in the target group
         const newTab = await chrome.tabs.create({
@@ -249,13 +247,9 @@ export const BookmarkUtils = {
         }
 
         if (isPinned) {
-            // Update space data - add to spaceBookmarks for pinned tabs
-            const space = spaces.find(s => s.id === targetSpaceId);
-            if (space) {
-                if (!space.spaceBookmarks.includes(newTab.id)) {
-                    space.spaceBookmarks.push(newTab.id);
-                }
-                saveSpaces();
+            if (sidebarState && !sidebarState.pinnedTabIds.includes(newTab.id)) {
+                sidebarState.pinnedTabIds.push(newTab.id);
+                saveSidebarState();
             }
 
             // Track pinned URL/bookmarkId for Arc-like "Back to Pinned URL" behavior.
@@ -267,12 +261,6 @@ export const BookmarkUtils = {
             }
         }
 
-        // Ensure the tab is placed in the correct position inside the group:
-        // Chrome should always be [space bookmarks][temporary], regardless of invertTabOrder.
-        if (typeof reconcileSpaceTabOrdering === 'function') {
-            await reconcileSpaceTabOrdering(targetSpaceId, { source: 'arcify', movedTabId: newTab.id });
-        }
-
         // Replace bookmark-only element with active tab element if provided
         if (replaceElement && createTabElement) {
             const activeTabData = {
@@ -280,7 +268,7 @@ export const BookmarkUtils = {
                 title: bookmarkData.title,
                 url: bookmarkData.url,
                 favIconUrl: newTab.favIconUrl,
-                spaceName: bookmarkData.spaceName,
+                sidebarName: bookmarkData.sidebarName,
                 pinnedUrl: bookmarkData.url,
                 bookmarkId: bookmarkData.bookmarkId || null
             };
@@ -378,26 +366,26 @@ export const BookmarkUtils = {
     /**
      * Update bookmark title if needed (recursive search and update)
      * @param {Object} tab - Tab object
-     * @param {Object} activeSpace - Active space object
+     * @param {Object} activeState - Active sidebar state object
      * @param {string} newTitle - New title to set
      * @returns {Promise<boolean>} True if bookmark was found and updated
      */
-    async updateBookmarkTitle(tab, activeSpace, newTitle) {
-        Logger.log(`[BookmarkUtils] Attempting to update bookmark for tab ${tab.id} in space ${activeSpace.name} to title: ${newTitle}`);
+    async updateBookmarkTitle(tab, activeState, newTitle) {
+        Logger.log(`[BookmarkUtils] Attempting to update bookmark for tab ${tab.id} in sidebar "${activeState.name}" to title: ${newTitle}`);
 
         try {
-            // Find the space folder - don't create it, that's LocalStorage's responsibility
+            // Find the Arcify bookmark root - don't create it here, that's LocalStorage's responsibility
             const arcifyFolder = await this.findArcifyFolder();
             if (!arcifyFolder) {
-                Logger.error(`[BookmarkUtils] Arcify folder not found for space ${activeSpace.name}.`);
+                Logger.error(`[BookmarkUtils] Arcify folder not found for sidebar "${activeState.name}".`);
                 return false;
             }
 
             const children = await chrome.bookmarks.getChildren(arcifyFolder.id);
-            const spaceFolder = children.find(f => f.title === activeSpace.name && !f.url);
+            const collectionFolder = children.find(f => f.title === activeState.name && !f.url);
 
-            if (!spaceFolder) {
-                Logger.error(`[BookmarkUtils] Space folder ${activeSpace.name} not found.`);
+            if (!collectionFolder) {
+                Logger.error(`[BookmarkUtils] Bookmark folder ${activeState.name} not found.`);
                 return false;
             }
 
@@ -424,9 +412,9 @@ export const BookmarkUtils = {
                 return false; // Not found in this folder
             };
 
-            const updated = await findAndUpdate(spaceFolder.id);
+            const updated = await findAndUpdate(collectionFolder.id);
             if (!updated) {
-                Logger.log(`[BookmarkUtils] Bookmark for URL ${tab.url} not found in space folder ${activeSpace.name}.`);
+                Logger.log(`[BookmarkUtils] Bookmark for URL ${tab.url} not found in folder ${activeCollection.name}.`);
             }
 
             return updated;

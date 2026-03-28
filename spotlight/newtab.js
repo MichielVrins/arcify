@@ -397,8 +397,8 @@ async function initializeSpotlight() {
     // Load initial results and update color asynchronously
     (async () => {
         try {
-            // Update active space color asynchronously
-            const realActiveSpaceColor = await SpotlightMessageClient.getActiveSpaceColor();
+            // Update active collection color asynchronously
+            const realActiveSpaceColor = await SpotlightMessageClient.getActiveCollectionColor();
             if (realActiveSpaceColor !== activeSpaceColor) {
                 const newColorDefinitions = await SpotlightUtils.getAccentColorCSS(realActiveSpaceColor);
                 const styleElement = document.querySelector('#arcify-spotlight-styles');
@@ -413,7 +413,7 @@ async function initializeSpotlight() {
                 }
             }
         } catch (error) {
-            Logger.error('[NewTab Spotlight] Error updating active space color:', error);
+            Logger.error('[NewTab Spotlight] Error updating active collection color:', error);
         }
 
         // Load initial results

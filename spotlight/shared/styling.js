@@ -8,8 +8,8 @@ function hexToRgb(hex) {
     return `${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}`;
 }
 
-// Function to get accent color CSS based on active space color
-export async function getAccentColorCSS(spaceColor) {
+// Function to get accent color CSS based on active collection color
+export async function getAccentColorCSS(collectionColor) {
     // Default RGB values for each color name (matching --chrome-*-color variables in styles.css)
     // We need this mapping to create rgba() variants with different opacities
     // Can't directly reuse the constants in styles.css due to two reasons:
@@ -26,13 +26,13 @@ export async function getAccentColorCSS(spaceColor) {
         cyan: '165, 226, 234'
     };
 
-    let rgb = defaultColorMap[spaceColor] || defaultColorMap.purple; // Fallback to purple
+    let rgb = defaultColorMap[collectionColor] || defaultColorMap.purple; // Fallback to purple
 
     // Try to get overridden color from settings
     try {
         const settings = await chrome.storage.sync.get(['colorOverrides']);
-        if (settings.colorOverrides && settings.colorOverrides[spaceColor]) {
-            const hexColor = settings.colorOverrides[spaceColor];
+        if (settings.colorOverrides && settings.colorOverrides[collectionColor]) {
+            const hexColor = settings.colorOverrides[collectionColor];
             const rgbValue = hexToRgb(hexColor);
             if (rgbValue) {
                 rgb = rgbValue;

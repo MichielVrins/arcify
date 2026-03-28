@@ -2,7 +2,7 @@
  * Options - Extension settings and preferences UI
  * 
  * Purpose: Provides user interface for configuring extension behavior and preferences
- * Key Functions: Auto-archive settings, default space configuration, extension preferences management
+ * Key Functions: Auto-archive settings, extension preferences management
  * Architecture: Options page that syncs with chrome.storage for persistent settings
  * 
  * Critical Notes:
@@ -13,7 +13,6 @@
  */
 
 import { Utils } from './utils.js';
-import { LocalStorage } from './localstorage.js';
 import { Logger } from './logger.js';
 
 // Default color values (must be 6-digit hex for color picker compatibility)
@@ -84,7 +83,6 @@ function applyColorOverrides(colorOverrides) {
 
 // Function to save options to chrome.storage
 async function saveOptions() {
-  const defaultSpaceNameSelect = document.getElementById('defaultSpaceName');
   const autoArchiveIdleMinutesInput = document.getElementById('autoArchiveIdleMinutes');
 
   // Collect color overrides (only non-default values)
@@ -97,7 +95,6 @@ async function saveOptions() {
   });
 
   const settings = {
-    defaultSpaceName: defaultSpaceNameSelect?.value || 'Home',
     autoArchiveEnabled: getCheckboxValue(document.getElementById('autoArchiveEnabled'), false),
     autoArchiveIdleMinutes: parseInt(autoArchiveIdleMinutesInput?.value, 10) || 360,
     invertTabOrder: getCheckboxValue(document.getElementById('invertTabOrder'), true),
@@ -137,8 +134,6 @@ function showToast() {
 async function restoreOptions() {
   const settings = await Utils.getSettings();
 
-  await populateSpacesDropdown(settings.defaultSpaceName);
-
   // Restore checkbox values
   setCheckboxValue(document.getElementById('autoArchiveEnabled'), settings.autoArchiveEnabled, false);
   setCheckboxValue(document.getElementById('invertTabOrder'), settings.invertTabOrder, true);
@@ -163,44 +158,6 @@ async function restoreOptions() {
   });
 
   applyColorOverrides(colorOverrides);
-}
-
-// Function to populate the spaces dropdown
-async function populateSpacesDropdown(selectedSpaceName) {
-  const defaultSpaceNameSelect = document.getElementById('defaultSpaceName');
-
-  try {
-    // Get space names using the LocalStorage utility function
-    const spaceNames = await LocalStorage.getSpaceNames();
-
-    // Clear existing options
-    defaultSpaceNameSelect.innerHTML = '';
-
-    // Add space options
-    spaceNames.forEach(spaceName => {
-      const option = document.createElement('option');
-      option.value = spaceName;
-      option.textContent = spaceName;
-      defaultSpaceNameSelect.appendChild(option);
-    });
-
-    // Only add default "Home" option if no spaces were found
-    if (spaceNames.length === 0) {
-      const defaultOption = document.createElement('option');
-      defaultOption.value = 'Home';
-      defaultOption.textContent = 'Home';
-      defaultSpaceNameSelect.appendChild(defaultOption);
-    }
-
-    // Set the selected value
-    defaultSpaceNameSelect.value = selectedSpaceName || 'Home';
-
-  } catch (error) {
-    Logger.error('Error loading spaces:', error);
-    // Fallback to default option if there's an error
-    defaultSpaceNameSelect.innerHTML = '<option value="Home">Home</option>';
-    defaultSpaceNameSelect.value = selectedSpaceName || 'Home';
-  }
 }
 
 // Function to setup advanced options toggle
@@ -240,9 +197,6 @@ function debouncedSave() {
 
 // Function to setup auto-save listeners
 function setupAutoSave() {
-  // Auto-save for dropdown
-  addListenerIfExists('defaultSpaceName', 'change', saveOptions);
-
   // Auto-save for checkboxes (most just save immediately)
   const checkboxIds = ['invertTabOrder', 'enableSpotlight', 'showAllOpenTabsInCollapsedFolders', 'debugLoggingEnabled'];
   checkboxIds.forEach(id => addListenerIfExists(id, 'change', saveOptions));

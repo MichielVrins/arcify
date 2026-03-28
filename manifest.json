@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Arcify: Arc like vertical tab spaces",
+  "name": "Arcify: Arc like vertical tab collections",
   "version": "4.0.3",
   "description": "A sidebar extension that replicates Arc browser's tab management system",
   "permissions": [
@@ -75,11 +75,11 @@
       },
       "description": "Quick Pin/Unpin Tab"
     },
-    "NextTabInSpace": {
-      "description": "Navigates to next tab in space"
+    "NextTabInCollection": {
+      "description": "Navigates to next tab in collection"
     },
-    "PrevTabInSpace": {
-      "description": "Navigates to prev tab in space"
+    "PrevTabInCollection": {
+      "description": "Navigates to prev tab in collection"
     },
     "toggleSpotlight": {
       "suggested_key": {

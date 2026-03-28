@@ -21,10 +21,6 @@ const LocalStorage = {
         }
         return folder;
     },
-    getOrCreateSpaceFolder: async function (spaceName) {
-        return this.getOrCreateArcifyFolder();
-    },
-
     // --- Recursive Helper Function to Merge Contents ---
     _mergeFolderContentsRecursive: async function (sourceFolderId, targetFolderId) {
         Logger.log(`Recursively merging contents from ${sourceFolderId} into ${targetFolderId}`);
@@ -65,9 +61,9 @@ const LocalStorage = {
         }
     },
 
-    // --- Updated Function to Merge Duplicate Space Folders ---
-    mergeDuplicateSpaceFolders: async function () {
-        Logger.log("Checking for duplicate space folders...");
+    // Merge duplicate folders under the Arcify bookmark root.
+    mergeDuplicateBookmarkFolders: async function () {
+        Logger.log("Checking for duplicate bookmark folders...");
         try {
             const [arcifyFolder] = await chrome.bookmarks.search({ title: 'Arcify' });
             if (!arcifyFolder) {
@@ -122,50 +118,10 @@ const LocalStorage = {
             Logger.log("Duplicate folder check complete.");
 
         } catch (error) {
-            Logger.error("Error during duplicate space folder merge process:", error);
+            Logger.error("Error during duplicate bookmark folder merge process:", error);
         }
     },
-    // --- End of Updated Function ---
 
-    // Get all space names from Arcify bookmark folders (source of truth)
-    getSpaceNames: async function () {
-        let spaceNames = new Set(); // Use Set to automatically deduplicate
-
-        try {
-            // Get the Arcify folder
-            const arcifyFolder = await this.getOrCreateArcifyFolder();
-            if (arcifyFolder) {
-                // Get all children of the Arcify folder
-                const children = await chrome.bookmarks.getChildren(arcifyFolder.id);
-
-                // Filter for folders only (not bookmarks) and extract names
-                const folders = children.filter(item => !item.url);
-                folders.forEach(folder => {
-                    spaceNames.add(folder.title);
-                });
-
-                Logger.log('Found spaces from Arcify bookmark folders:', spaceNames.size);
-            }
-        } catch (bookmarkError) {
-            Logger.log('Could not get spaces from bookmark folders:', bookmarkError);
-        }
-
-        // If no spaces found in bookmarks, try fallback to tab groups
-        if (spaceNames.size === 0) {
-            try {
-                const tabGroups = await chrome.tabGroups.query({});
-                tabGroups.forEach(group => {
-                    spaceNames.add(group.title);
-                });
-                Logger.log('Found spaces from tab groups (fallback):', spaceNames.size);
-            } catch (tabGroupError) {
-                Logger.log('Could not query tab groups:', tabGroupError);
-            }
-        }
-
-        // Return sorted array of unique space names
-        return Array.from(spaceNames).sort();
-    }
 }
 
 export { LocalStorage };

@@ -25,10 +25,10 @@ const ChromeHelper = {
         });
         return newTab;
     },
-    createNewTabGroup: async function (newTab, spaceName, spaceColor) {
+    createNewTabGroup: async function (newTab, collectionName, collectionColor) {
         // Create a new tab group with the new tab
         const groupId = await chrome.tabs.group({ tabIds: [newTab.id] });
-        await chrome.tabGroups.update(groupId, { title: spaceName, color: spaceColor });
+        await chrome.tabGroups.update(groupId, { title: collectionName, color: collectionColor });
         return groupId;
     }
 }

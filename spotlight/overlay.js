@@ -570,7 +570,7 @@ async function activateSpotlight(spotlightTabMode = 'current-tab') {
      * 
      * Solution: Show UI immediately, then update asynchronously in background
      * - UI appears instantly with default purple color
-     * - Real space color loads and smoothly transitions via CSS
+     * - Real collection color loads and smoothly transitions via CSS
      * - Initial results load progressively after UI is visible
      * 
      * Benefits: Additional 20-50ms improvement in perceived performance
@@ -579,8 +579,8 @@ async function activateSpotlight(spotlightTabMode = 'current-tab') {
     // Async Phase 2 improvements: Update color and load initial results non-blocking
     (async () => {
         try {
-            // Update active space color asynchronously (non-blocking)
-            const realActiveSpaceColor = await SpotlightMessageClient.getActiveSpaceColor();
+            // Update active collection color asynchronously (non-blocking)
+            const realActiveSpaceColor = await SpotlightMessageClient.getActiveCollectionColor();
             if (realActiveSpaceColor !== activeSpaceColor) {
                 // Update CSS variables for smooth color transition
                 const newColorDefinitions = await SpotlightUtils.getAccentColorCSS(realActiveSpaceColor);
@@ -597,7 +597,7 @@ async function activateSpotlight(spotlightTabMode = 'current-tab') {
                 }
             }
         } catch (error) {
-            Logger.error('[Spotlight] Error updating active space color:', error);
+            Logger.error('[Spotlight] Error updating active collection color:', error);
         }
 
         // Load initial results after color update (if input is still empty)

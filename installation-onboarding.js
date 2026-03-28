@@ -74,7 +74,7 @@ class InstallationOnboarding {
                 urlParams.set('spotlight-search', this.shortcuts['toggleSpotlight']);
             }
             if (this.shortcuts['quickPinToggle']) {
-                urlParams.set('switch-spaces', this.shortcuts['quickPinToggle']);
+                urlParams.set('switch-collections', this.shortcuts['quickPinToggle']);
             }
             if (this.shortcuts['toggleSpotlightNewTab']) {
                 urlParams.set('new-tab', this.shortcuts['toggleSpotlightNewTab']);
@@ -248,7 +248,7 @@ class InstallationOnboarding {
         const shortcutElements = {
             'toggle-sidepanel': shortcuts['_execute_action'] || 'Alt+S',
             'spotlight-search': shortcuts['toggleSpotlight'] || 'Alt+L',
-            'switch-spaces': shortcuts['quickPinToggle'] || 'Alt+D', // Using quickPinToggle for space switching
+            'switch-collections': shortcuts['quickPinToggle'] || 'Alt+D', // Using quickPinToggle for collection switching
             'new-tab': shortcuts['toggleSpotlightNewTab'] || 'Alt+T' // New Tab spotlight
         };
 

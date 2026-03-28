@@ -2,8 +2,8 @@
  * DOMManager - Sidebar DOM manipulation and UI component management
  * 
  * Purpose: Handles dynamic DOM creation, updates, and event handling for sidebar interface
- * Key Functions: Space/tab DOM rendering, context menus, input dialogs, drag-and-drop visual feedback
- * Architecture: Collection of utility functions for DOM manipulation and UI state management
+ * Key Functions: Tab DOM rendering, context menus, input dialogs, drag-and-drop visual feedback
+ * Architecture: Utility functions for DOM manipulation and UI state management
  * 
  * Critical Notes:
  * - Separates DOM manipulation logic from business logic in sidebar.js
@@ -19,12 +19,12 @@ import { Logger } from './logger.js';
 // DOM Elements
 const newTabBtn = document.getElementById('newTabBtn');
 
-export function setupDOMElements(createNewSpace) {
+export function setupDOMElements() {
     newTabBtn.addEventListener('click', () => {
         chrome.runtime.sendMessage({ command: "toggleSpotlightNewTab" });
     });
 
-    document.querySelectorAll('.space-color-select').forEach(select => {
+    document.querySelectorAll('.sidebar-color-select').forEach(select => {
         const colorPicker = select.nextElementSibling;
         const currentColor = select.value;
         const swatch = colorPicker.querySelector(`[data-color="${currentColor}"]`);
@@ -47,28 +47,18 @@ export function activateTabInDOM(tabId) {
     }
 }
 
-export function activateSpaceInDOM(spaceId, spaces, updateSpaceSwitcher) {
-    // Show/hide space containers
-    document.querySelectorAll('.space').forEach(s => {
-        const isActive = s.dataset.spaceId === String(spaceId);
-        s.classList.toggle('active', isActive);
-        s.style.display = isActive ? 'flex' : 'none';
-    });
-
-    // Get space color and update sidebar container background
-    const space = spaces.find(s => s.id === spaceId);
-    if (space) {
-        // Update background color
-        const sidebarContainer = document.getElementById('sidebar-container');
-        sidebarContainer.style.setProperty('--space-bg-color', `var(--chrome-${space.color}-color, rgba(255, 255, 255, 0.1))`);
-        sidebarContainer.style.setProperty('--space-bg-color-dark', `var(--chrome-${space.color}-color-dark, rgba(255, 255, 255, 0.1))`);
-    }
-
-    // Update space switcher
-    updateSpaceSwitcher();
+export function applySidebarColor(color) {
+    const sidebarContainer = document.getElementById('sidebar-container');
+    if (!sidebarContainer || !color) return;
+    const colorValue = `var(--chrome-${color}-color, rgba(255, 255, 255, 0.1))`;
+    const colorDarkValue = `var(--chrome-${color}-color-dark, rgba(255, 255, 255, 0.1))`;
+    sidebarContainer.style.setProperty('--sidebar-bg-color', colorValue);
+    sidebarContainer.style.setProperty('--sidebar-bg-color-dark', colorDarkValue);
+    sidebarContainer.style.setProperty('--collection-bg-color', colorValue);
+    sidebarContainer.style.setProperty('--collection-bg-color-dark', colorDarkValue);
 }
 
-export function showTabContextMenu(x, y, tab, isPinned, isBookmarkOnly, tabElement, closeTab, _itemsState, _moveItem, _activateView, _bookmarkFolders, _createCollectionFromInactive, onReplaceBookmarkUrlWithCurrent = null) {
+export function showTabContextMenu(x, y, tab, isPinned, isBookmarkOnly, tabElement, closeTab, onReplaceBookmarkUrlWithCurrent = null) {
     // Remove any existing context menus
     const existingMenu = document.getElementById('tab-context-menu');
     if (existingMenu) {
@@ -84,7 +74,7 @@ export function showTabContextMenu(x, y, tab, isPinned, isBookmarkOnly, tabEleme
 
     // --- Menu Items ---
 
-    // Only show these options for actual tabs that are part of a space
+    // Only show these options for actual tabs managed by Arcify
     if (!isBookmarkOnly) {
         const addToFavoritesOption = document.createElement('div');
         addToFavoritesOption.className = 'context-menu-item';
@@ -104,7 +94,7 @@ export function showTabContextMenu(x, y, tab, isPinned, isBookmarkOnly, tabEleme
         });
         contextMenu.appendChild(pinOption);
 
-        // Arc-like: allow updating the underlying space bookmark URL to the current tab URL.
+        // Arc-like: allow updating the underlying pinned bookmark URL to the current tab URL.
         if (isPinned && typeof onReplaceBookmarkUrlWithCurrent === 'function') {
             const replaceBookmarkUrlOption = document.createElement('div');
             replaceBookmarkUrlOption.className = 'context-menu-item';
@@ -162,9 +152,9 @@ export function showTabContextMenu(x, y, tab, isPinned, isBookmarkOnly, tabEleme
 }
 
 export async function showArchivedTabsPopup() {
-    const spaceElement = document.querySelector('.space');
-    if (!spaceElement) return;
-    const popup = spaceElement.querySelector('.archived-tabs-popup');
+    const sidebarView = document.querySelector('.sidebar-view');
+    if (!sidebarView) return;
+    const popup = sidebarView.querySelector('.archived-tabs-popup');
     const list = popup.querySelector('.archived-tabs-list');
     const message = popup.querySelector('.no-archived-tabs-message');
     list.innerHTML = '';
@@ -310,7 +300,7 @@ export function showUrlCopyToast() {
     }, 2000);
 }
 
-export function setupQuickPinListener(moveTabToSpace, moveTabToPinned, moveTabToTemp, currentActiveSpaceId, setActiveSpaceFunc, activatePinnedTabByURL) {
+export function setupQuickPinListener(moveTabInSidebar, moveTabToPinned, moveTabToTemp) {
     chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
         if (request.command === "quickPinToggle" || request.command === "togglePin") {
             Logger.log(`[QuickPin] Received command: ${request.command}`, { request });
@@ -326,12 +316,12 @@ export function setupQuickPinListener(moveTabToSpace, moveTabToPinned, moveTabTo
 
                     if (sidebarState.temporaryTabs.includes(tabToToggle.id)) {
                         Logger.log(`[QuickPin] Tab ${tabToToggle.id} is a temporary tab. Pinning it.`);
-                        moveTabToSpace(tabToToggle.id, sidebarState.id, true);
+                        moveTabInSidebar(tabToToggle.id, true);
                         moveTabToPinned(sidebarState, tabToToggle);
                     } else {
-                        if (sidebarState.spaceBookmarks.includes(tabToToggle.id)) {
+                        if (sidebarState.pinnedTabIds.includes(tabToToggle.id)) {
                             Logger.log(`[QuickPin] Tab ${tabToToggle.id} is a pinned tab. Unpinning it.`);
-                            moveTabToSpace(tabToToggle.id, sidebarState.id, false);
+                            moveTabInSidebar(tabToToggle.id, false);
                             moveTabToTemp(sidebarState, tabToToggle);
                         } else {
                             Logger.warn(`[QuickPin] Tab ${tabToToggle.id} not found in the sidebar state.`);
@@ -393,8 +383,7 @@ export function setupQuickPinListener(moveTabToSpace, moveTabToPinned, moveTabTo
         } else if (request.action === "activatePinnedTab") {
             Logger.log("[Spotlight] Activating pinned tab:", request);
 
-            // Use the utility function to handle pinned tab activation
-            activatePinnedTabByURL(request.bookmarkUrl, request.spaceId, request.spaceName);
+            activatePinnedTabByURL(request.bookmarkUrl);
         }
     });
 }
@@ -442,23 +431,22 @@ export function getDragAfterElement(container, position, options = {}) {
 // ============================================================================
 
 /**
- * Get a space element by its ID
- * @param {number|string} spaceId - The space ID
+ * Get the main sidebar view element
  * @returns {HTMLElement|null}
  */
-export function getSpaceElement(spaceId) {
-    return document.querySelector(`[data-space-id="${spaceId}"]`);
+export function getCollectionElement() {
+    return document.querySelector('.sidebar-view');
 }
 
 /**
- * Get both pinned and temporary containers for a space element
- * @param {HTMLElement} spaceElement - The space element
+ * Get both pinned and temporary containers for a sidebar view element
+ * @param {HTMLElement} collectionElement - The sidebar view element
  * @returns {{pinned: HTMLElement|null, temp: HTMLElement|null}}
  */
-export function getContainers(spaceElement) {
+export function getContainers(collectionElement) {
     return {
-        pinned: spaceElement?.querySelector('[data-tab-type="pinned"]') ?? null,
-        temp: spaceElement?.querySelector('[data-tab-type="temporary"]') ?? null
+        pinned: collectionElement?.querySelector('[data-tab-type="pinned"]') ?? null,
+        temp: collectionElement?.querySelector('[data-tab-type="temporary"]') ?? null
     };
 }
 
@@ -472,21 +460,21 @@ export function getTabElement(tabId) {
 }
 
 /**
- * Get pinned container for a space element
- * @param {HTMLElement} spaceElement - The space element
+ * Get pinned container for a sidebar view element
+ * @param {HTMLElement} collectionElement - The sidebar view element
  * @returns {HTMLElement|null}
  */
-export function getPinnedContainer(spaceElement) {
-    return spaceElement?.querySelector('[data-tab-type="pinned"]') ?? null;
+export function getPinnedContainer(collectionElement) {
+    return collectionElement?.querySelector('[data-tab-type="pinned"]') ?? null;
 }
 
 /**
- * Get temporary container for a space element
- * @param {HTMLElement} spaceElement - The space element
+ * Get temporary container for a sidebar view element
+ * @param {HTMLElement} collectionElement - The sidebar view element
  * @returns {HTMLElement|null}
  */
-export function getTempContainer(spaceElement) {
-    return spaceElement?.querySelector('[data-tab-type="temporary"]') ?? null;
+export function getTempContainer(collectionElement) {
+    return collectionElement?.querySelector('[data-tab-type="temporary"]') ?? null;
 }
 
 // ============================================================================
@@ -579,7 +567,7 @@ export function handleEmptyContainerDrop(container, draggingElement, placeholder
         // For favorites area - use display none
         placeholder.style.display = 'none';
     } else if (placeholder.classList.contains('tab-placeholder')) {
-        // For space containers - use hidden class
+        // For sidebar containers - use hidden class
         placeholder.classList.add('hidden');
     }
 

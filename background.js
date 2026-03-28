@@ -94,14 +94,14 @@ chrome.commands.onCommand.addListener(async function (command) {
     if (command === "quickPinToggle") {
         // Send a message to the sidebar
         chrome.runtime.sendMessage({ command: "quickPinToggle" });
-    } else if (command === "NextTabInSpace") {
+    } else if (command === "NextTabInCollection") {
         Utils.findActiveCollectionAndTab().then(async ({ state, tab } = {}) => {
             if (state) {
                 await Utils.moveToNextTabInCollection(tab.id, state);
             }
         });
     }
-    else if (command === "PrevTabInSpace") {
+    else if (command === "PrevTabInCollection") {
         Utils.findActiveCollectionAndTab().then(async ({ state, tab } = {}) => {
             if (state) {
                 await Utils.moveToPrevTabInCollection(tab.id, state);
@@ -109,7 +109,7 @@ chrome.commands.onCommand.addListener(async function (command) {
         });
         Logger.log("sending");
         // Send a message to the sidebar
-        chrome.runtime.sendMessage({ command: "PrevTabInSpace" });
+        chrome.runtime.sendMessage({ command: "PrevTabInCollection" });
     } else if (command === "toggleSpotlight") {
         await injectSpotlightScript(SpotlightTabMode.CURRENT_TAB);
     } else if (command === "toggleSpotlightNewTab") {
@@ -433,7 +433,7 @@ async function runAutoArchiveCheck() {
 
         const sidebarState = await Utils.getSidebarState();
         const bookmarkedUrls = new Set();
-        (sidebarState.spaceBookmarks || []).forEach(bookmark => {
+        (sidebarState.pinnedTabIds || []).forEach(bookmark => {
             if (typeof bookmark === 'string') {
                 bookmarkedUrls.add(bookmark);
             } else if (bookmark && bookmark.url) {
@@ -655,11 +655,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return { pinnedTabs };
         }, sendResponse, 'getting pinned tabs', { pinnedTabs: [] });
 
-    } else if (message.action === 'getActiveSpaceColor') {
+    } else if (message.action === 'getActiveCollectionColor') {
         return handleAsyncMessage(async () => {
             const sidebarState = await Utils.getSidebarState();
             return { color: sidebarState?.color || 'purple' };
-        }, sendResponse, 'getting active space color', { color: 'purple' });
+        }, sendResponse, 'getting active sidebar color', { color: 'purple' });
 
     } else if (message.action === 'performSearch') {
         return handleAsyncMessage(async () => {

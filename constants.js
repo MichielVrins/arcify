@@ -54,9 +54,6 @@ export const CSS_CLASSES = {
     FOLDER_ICON: 'folder-icon',
     FOLDER_TOGGLE: 'folder-toggle',
 
-    // Space classes
-    SPACE: 'space',
-
     // UI feedback classes
     ERROR_POPUP: 'error-popup',
     SPOTLIGHT_ACTIVE: 'spotlight-active',
@@ -99,7 +96,7 @@ export const SELECTORS = {
 
     // UI element selectors
     SIDEBAR_CONTAINER: '#sidebar-container',
-    SPACES_LIST: '#spacesList',
+    SPACES_LIST: '#collectionsList',
     PINNED_FAVICONS: '#pinnedFavicons',
     NEW_TAB_BTN: '#newTabBtn',
     URL_COPY_TOAST: '#urlCopyToast',

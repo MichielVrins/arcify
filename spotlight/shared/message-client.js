@@ -51,21 +51,21 @@ export class SpotlightMessageClient {
     }
 
 
-    // Get active space color from background
-    static async getActiveSpaceColor() {
+    // Get active collection color from background
+    static async getActiveCollectionColor() {
         try {
             const response = await chrome.runtime.sendMessage({
-                action: 'getActiveSpaceColor'
+                action: 'getActiveCollectionColor'
             });
 
             if (response && response.success && response.color) {
                 return response.color;
             } else {
-                Logger.error('[SpotlightMessageClient] Failed to get active space color:', response?.error);
+                Logger.error('[SpotlightMessageClient] Failed to get active collection color:', response?.error);
                 return 'purple'; // Default fallback
             }
         } catch (error) {
-            Logger.error('[SpotlightMessageClient] Error getting active space color:', error);
+            Logger.error('[SpotlightMessageClient] Error getting active collection color:', error);
             return 'purple'; // Default fallback
         }
     }

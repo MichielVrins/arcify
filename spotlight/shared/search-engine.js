@@ -145,14 +145,14 @@ export class SearchEngine {
 
                 case ResultType.PINNED_TAB:
                     Logger.log('[SearchEngine] Handling PINNED_TAB result:', result);
-                    if (!result.metadata?.spaceId) {
-                        throw new Error('PINNED_TAB result missing spaceId in metadata');
+                    if (!result.metadata?.collectionId) {
+                        throw new Error('PINNED_TAB result missing collectionId in metadata');
                     }
 
                     const pinnedTabMessage = {
                         action: 'activatePinnedTab',
-                        spaceId: result.metadata.spaceId,
-                        spaceName: result.metadata.spaceName,
+                        collectionId: result.metadata.collectionId,
+                        collectionName: result.metadata.collectionName,
                         bookmarkUrl: result.url,
                         mode: mode
                     };

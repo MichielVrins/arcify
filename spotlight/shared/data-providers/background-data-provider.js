@@ -3,6 +3,7 @@
 import { BaseDataProvider } from './base-data-provider.js';
 import { AutocompleteProvider } from './autocomplete-provider.js';
 import { BookmarkUtils } from '../../../bookmark-utils.js';
+import { Utils } from '../../../utils.js';
 import { Logger } from '../../../logger.js';
 
 const TAB_ACTIVITY_STORAGE_KEY = 'tabLastActivity';
@@ -104,10 +105,8 @@ export class BackgroundDataProvider extends BaseDataProvider {
     async getPinnedTabsData(query = '') {
         Logger.log('[BackgroundDataProvider] getPinnedTabsData called with query:', query);
         try {
-            // Get spaces from storage
-            const storage = await chrome.storage.local.get('spaces');
-            const spaces = storage.spaces || [];
-            Logger.log('[BackgroundDataProvider] Found spaces:', spaces.length, spaces.map(s => s.name));
+            const sidebarState = await Utils.getSidebarState();
+            Logger.log('[BackgroundDataProvider] Loaded collection state:', sidebarState?.name);
             
             // Get current tabs
             const tabs = await chrome.tabs.query({});
@@ -121,19 +120,18 @@ export class BackgroundDataProvider extends BaseDataProvider {
             }
             Logger.log('[BackgroundDataProvider] Found Arcify folder:', arcifyFolder.id);
 
-            const spaceFolders = await chrome.bookmarks.getChildren(arcifyFolder.id);
-            Logger.log('[BackgroundDataProvider] Found space folders:', spaceFolders.length, spaceFolders.map(f => f.title));
+            const collectionFolders = await chrome.bookmarks.getChildren(arcifyFolder.id);
+            Logger.log('[BackgroundDataProvider] Found collection folders:', collectionFolders.length, collectionFolders.map(f => f.title));
             const pinnedTabs = [];
 
-            // Process each space folder
-            for (const spaceFolder of spaceFolders) {
-                const space = spaces.find(s => s.name === spaceFolder.title);
-                Logger.log('[BackgroundDataProvider] Processing space folder:', spaceFolder.title, 'found space:', !!space);
-                if (!space) continue;
+            // Process each collection folder
+            for (const collectionFolder of collectionFolders) {
+                const collection = sidebarState;
+                Logger.log('[BackgroundDataProvider] Processing collection folder:', collectionFolder.title);
 
-                // Get all bookmarks in this space folder (recursively)
-                const bookmarks = await BookmarkUtils.getBookmarksFromFolderRecursive(spaceFolder.id);
-                Logger.log('[BackgroundDataProvider] Found bookmarks in', spaceFolder.title, ':', bookmarks.length);
+                // Get all bookmarks in this collection folder (recursively)
+                const bookmarks = await BookmarkUtils.getBookmarksFromFolderRecursive(collectionFolder.id);
+                Logger.log('[BackgroundDataProvider] Found bookmarks in', collectionFolder.title, ':', bookmarks.length);
                 
                 for (const bookmark of bookmarks) {
                     // Check if there's a matching open tab
@@ -153,9 +151,9 @@ export class BackgroundDataProvider extends BaseDataProvider {
 
                     const pinnedTab = {
                         ...bookmark,
-                        spaceId: space.id,
-                        spaceName: space.name,
-                        spaceColor: space.color,
+                        collectionId: collection.id,
+                        collectionName: collection.name,
+                        collectionColor: collection.color,
                         tabId: matchingTab?.id || null,
                         isActive: !!matchingTab
                     };

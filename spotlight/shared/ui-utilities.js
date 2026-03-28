@@ -227,7 +227,7 @@ export class SpotlightUtils {
     }
 
     // Generate accent color CSS based on active space color (from overlay.js)
-    static async getAccentColorCSS(spaceColor) {
+    static async getAccentColorCSS(collectionColor) {
         // Default RGB values for each color name (matching --chrome-*-color variables in styles.css)
         const defaultColorMap = {
             grey: '204, 204, 204',
@@ -240,13 +240,13 @@ export class SpotlightUtils {
             cyan: '165, 226, 234'
         };
 
-        let rgb = defaultColorMap[spaceColor] || defaultColorMap.purple;
+        let rgb = defaultColorMap[collectionColor] || defaultColorMap.purple;
 
         // Try to get overridden color from settings
         try {
             const settings = await chrome.storage.sync.get(['colorOverrides']);
-            if (settings.colorOverrides && settings.colorOverrides[spaceColor]) {
-                const hexColor = settings.colorOverrides[spaceColor];
+            if (settings.colorOverrides && settings.colorOverrides[collectionColor]) {
+                const hexColor = settings.colorOverrides[collectionColor];
                 const rgbValue = this.hexToRgb(hexColor);
                 if (rgbValue) {
                     rgb = rgbValue;

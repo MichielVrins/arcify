@@ -2,12 +2,12 @@
  * Utils - Shared utility functions and storage management
  * 
  * Purpose: Provides common utilities and centralized settings/storage management across the extension
- * Key Functions: Settings CRUD, archived tabs management, space data operations, default configurations
+ * Key Functions: Settings CRUD, archived tabs management, sidebar state operations, default configurations
  * Architecture: Static utility class with async storage operations
  * 
  * Critical Notes:
  * - Central source of truth for extension settings and defaults
- * - Handles both chrome.storage.sync (settings) and chrome.storage.local (spaces/tabs data)
+ * - Handles both chrome.storage.sync (settings) and chrome.storage.local (sidebar/tab data)
  * - Used by both background script and UI components for consistent data access
  * - Settings changes automatically sync across extension contexts
  */
@@ -19,14 +19,14 @@ import { LocalStorage } from './localstorage.js';
 const MAX_ARCHIVED_TABS = 100;
 const ARCHIVED_TABS_KEY = 'archivedTabs';
 const SIDEBAR_STATE_KEY = 'sidebarState';
-const MAIN_COLLECTION_ID = 'main';
+const MAIN_SIDEBAR_ID = 'main';
 
 const Utils = {
 
-    processBookmarkFolder: async function (folder, groupId) {
+    processBookmarkFolder: async function (folder) {
         const bookmarks = [];
         const items = await chrome.bookmarks.getChildren(folder.id);
-        const tabs = await chrome.tabs.query({ groupId: groupId });
+        const tabs = await chrome.tabs.query({ currentWindow: true });
         for (const item of items) {
             if (item.url) {
                 // This is a bookmark
@@ -80,7 +80,6 @@ const Utils = {
 
     getSettings: async function () {
         const defaultSettings = {
-            defaultSpaceName: 'Home',
             autoArchiveEnabled: false, // Default: disabled
             autoArchiveIdleMinutes: 360, // Default: 30 minutes
             enableSpotlight: true, // Default: enabled (controls both spotlight and custom new tab)
@@ -96,33 +95,27 @@ const Utils = {
     },
 
     getDefaultSidebarState: async function () {
-        const defaultName = (await this.getSettings()).defaultSpaceName || 'Home';
+        const defaultName = 'Home';
         return {
-            id: MAIN_COLLECTION_ID,
+            id: MAIN_SIDEBAR_ID,
             uuid: this.generateUUID(),
             name: defaultName,
             color: await this.getTabGroupColor(defaultName),
-            spaceBookmarks: [],
+            pinnedTabIds: [],
             temporaryTabs: [],
             lastTab: null
         };
     },
 
     getSidebarState: async function () {
-        const result = await chrome.storage.local.get([SIDEBAR_STATE_KEY, 'spaces']);
-        if (result[SIDEBAR_STATE_KEY]) {
-            return result[SIDEBAR_STATE_KEY];
-        }
-
-        const migrated = Array.isArray(result.spaces) && result.spaces.length > 0
-            ? result.spaces[0]
-            : await this.getDefaultSidebarState();
+        const result = await chrome.storage.local.get([SIDEBAR_STATE_KEY]);
+        const migrated = result[SIDEBAR_STATE_KEY] || await this.getDefaultSidebarState();
 
         const normalized = {
             ...(await this.getDefaultSidebarState()),
             ...migrated,
-            id: MAIN_COLLECTION_ID,
-            spaceBookmarks: Array.isArray(migrated?.spaceBookmarks) ? migrated.spaceBookmarks : [],
+            id: MAIN_SIDEBAR_ID,
+            pinnedTabIds: Array.isArray(migrated?.pinnedTabIds) ? migrated.pinnedTabIds : [],
             temporaryTabs: Array.isArray(migrated?.temporaryTabs) ? migrated.temporaryTabs : []
         };
 
@@ -134,13 +127,12 @@ const Utils = {
         const normalized = {
             ...(await this.getDefaultSidebarState()),
             ...sidebarState,
-            id: MAIN_COLLECTION_ID,
-            spaceBookmarks: Array.isArray(sidebarState?.spaceBookmarks) ? sidebarState.spaceBookmarks : [],
+            id: MAIN_SIDEBAR_ID,
+            pinnedTabIds: Array.isArray(sidebarState?.pinnedTabIds) ? sidebarState.pinnedTabIds : [],
             temporaryTabs: Array.isArray(sidebarState?.temporaryTabs) ? sidebarState.temporaryTabs : []
         };
 
         await chrome.storage.local.set({ [SIDEBAR_STATE_KEY]: normalized });
-        await chrome.storage.local.remove('spaces');
         return normalized;
     },
 
@@ -183,7 +175,7 @@ const Utils = {
         }
     },
 
-    // --- Pinned (Space Bookmark) Tab State ---
+    // --- Pinned Bookmark Tab State ---
     // Tracks the original "pinned/bookmark URL" for a pinned tab, even if the user navigates away.
     // Keyed by ephemeral tabId (per session) which is sufficient for Arc-like "Back to Pinned URL".
     getPinnedTabStates: async function () {
@@ -235,13 +227,13 @@ const Utils = {
         }
     },
 
-    updateBookmarkTitleIfNeeded: async function (tab, activeSpace, newTitle) {
-        Logger.log(`Attempting to update bookmark for pinned tab ${tab.id} in space ${activeSpace.name} to title: ${newTitle}`);
+    updateBookmarkTitleIfNeeded: async function (tab, activeState, newTitle) {
+        Logger.log(`Attempting to update bookmark for pinned tab ${tab.id} in sidebar "${activeState.name}" to title: ${newTitle}`);
 
         try {
-            const spaceFolder = await LocalStorage.getOrCreateArcifyFolder();
-            if (!spaceFolder) {
-                Logger.error(`Bookmark folder for space ${activeSpace.name} not found.`);
+            const bookmarkRoot = await LocalStorage.getOrCreateArcifyFolder();
+            if (!bookmarkRoot) {
+                Logger.error(`Bookmark root for sidebar "${activeState.name}" not found.`);
                 return;
             }
 
@@ -268,9 +260,9 @@ const Utils = {
                 return false; // Not found in this folder
             };
 
-            const updated = await findAndUpdate(spaceFolder.id);
+            const updated = await findAndUpdate(bookmarkRoot.id);
             if (!updated) {
-                Logger.log(`Bookmark for URL ${tab.url} not found in space folder ${activeSpace.name}.`);
+                Logger.log(`Bookmark for URL ${tab.url} not found in sidebar "${activeState.name}".`);
             }
 
         } catch (error) {
@@ -296,12 +288,12 @@ const Utils = {
     },
 
     // Add a tab to the archive
-    addArchivedTab: async function (tabData) { // tabData = { url, name, collectionId, archivedAt }
+    addArchivedTab: async function (tabData) { // tabData = { url, name, sidebarId, archivedAt }
         if (!tabData || !tabData.url || !tabData.name) return;
 
         const archivedTabs = await this.getArchivedTabs();
 
-        // Check if URL already exists in archive (regardless of space)
+        // Check if URL already exists in archive regardless of its original sidebar state
         const existingTab = archivedTabs.find(t => t.url === tabData.url);
         if (existingTab) {
             Logger.log(`Tab with URL already archived: ${tabData.name} (${tabData.url})`);
@@ -309,7 +301,7 @@ const Utils = {
         }
 
         // Add new tab with timestamp
-        const newArchiveEntry = { ...tabData, collectionId: tabData.collectionId || MAIN_COLLECTION_ID, archivedAt: Date.now() };
+        const newArchiveEntry = { ...tabData, collectionId: tabData.collectionId || MAIN_SIDEBAR_ID, archivedAt: Date.now() };
         archivedTabs.push(newArchiveEntry);
 
         // Sort by timestamp (newest first for potential slicing, though FIFO means oldest removed)
@@ -321,7 +313,7 @@ const Utils = {
         }
 
         await this.saveArchivedTabs(archivedTabs);
-        Logger.log(`Archived tab: ${tabData.name} from collection ${newArchiveEntry.collectionId}`);
+        Logger.log(`Archived tab: ${tabData.name} from sidebar ${newArchiveEntry.collectionId}`);
     },
 
     // Function to archive a tab (likely called from context menu)
@@ -333,7 +325,7 @@ const Utils = {
             const tabData = {
                 url: tab.url,
                 name: tab.title,
-                collectionId: MAIN_COLLECTION_ID
+                collectionId: MAIN_SIDEBAR_ID
             };
 
             await this.addArchivedTab(tabData);
@@ -346,13 +338,13 @@ const Utils = {
     },
 
     // Remove a tab from the archive (e.g., after restoration)
-    removeArchivedTab: async function (url, collectionId = MAIN_COLLECTION_ID) {
+    removeArchivedTab: async function (url, collectionId = MAIN_SIDEBAR_ID) {
         if (!url) return;
 
         let archivedTabs = await this.getArchivedTabs();
-        archivedTabs = archivedTabs.filter(tab => !(tab.url === url && (tab.collectionId || MAIN_COLLECTION_ID) === collectionId));
+        archivedTabs = archivedTabs.filter(tab => !(tab.url === url && (tab.collectionId || MAIN_SIDEBAR_ID) === collectionId));
         await this.saveArchivedTabs(archivedTabs);
-        Logger.log(`Removed archived tab: ${url} from collection ${collectionId}`);
+        Logger.log(`Removed archived tab: ${url} from sidebar ${collectionId}`);
     },
 
     restoreArchivedTab: async function (archivedTabData) {
@@ -435,10 +427,10 @@ const Utils = {
         }
         return false; // Bookmark not found
     },
-    // Navigate to adjacent tab within the single Arcify collection
+    // Navigate to adjacent tab within the single Arcify sidebar
     _navigateTabInState: async function (tabId, sidebarState, direction) {
         const temporaryTabs = sidebarState?.temporaryTabs ?? [];
-        const pinnedTabs = sidebarState?.spaceBookmarks ?? [];
+        const pinnedTabs = sidebarState?.pinnedTabIds ?? [];
         const allTabs = [...pinnedTabs, ...temporaryTabs];
 
         if (allTabs.length === 0) return;
@@ -470,29 +462,16 @@ const Utils = {
         }
         const foundTab = foundTabs[0];
         if (sidebarState.temporaryTabs.includes(foundTab.id)) {
-            Logger.log(`[TabNavigation] Tab ${foundTab.id} is a temporary tab in the main collection.`);
-            return { space: sidebarState, tab: foundTab };
+            Logger.log(`[TabNavigation] Tab ${foundTab.id} is a temporary tab in the main sidebar.`);
+            return { state: sidebarState, tab: foundTab };
         }
 
-        if (sidebarState.spaceBookmarks.includes(foundTab.id)) {
-            Logger.log(`[TabNavigation] Tab ${foundTab.id} is a pinned tab in the main collection.`);
-            return { space: sidebarState, tab: foundTab };
+        if (sidebarState.pinnedTabIds.includes(foundTab.id)) {
+            Logger.log(`[TabNavigation] Tab ${foundTab.id} is a pinned tab in the main sidebar.`);
+            return { state: sidebarState, tab: foundTab };
         }
 
         return undefined
-    },
-
-    movToNextTabInSpace: async function (tabId, sidebarState) {
-        return this.moveToNextTabInCollection(tabId, sidebarState);
-    },
-
-    movToPrevTabInSpace: async function (tabId, sidebarState) {
-        return this.moveToPrevTabInCollection(tabId, sidebarState);
-    },
-
-    findActiveSpaceAndTab: async function () {
-        const result = await this.findActiveCollectionAndTab();
-        return result ? { space: result.space, tab: result.tab } : undefined;
     },
 
     // Helper function to adjust menu position to keep it within viewport
