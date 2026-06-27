@@ -2,7 +2,6 @@
 
 import { BaseDataProvider } from './base-data-provider.js';
 import { AutocompleteProvider } from './autocomplete-provider.js';
-import { BookmarkUtils } from '../../../bookmark-utils.js';
 import { Utils } from '../../../utils.js';
 import { Logger } from '../../../logger.js';
 
@@ -59,14 +58,8 @@ export class BackgroundDataProvider extends BaseDataProvider {
     }
 
     async getBookmarksData(query) {
-        return await BookmarkUtils.getBookmarksData(query);
-    }
-
-    isUnderArcifyFolder(bookmark, arcifyFolderId) {
-        // Simple heuristic: check if the bookmark's parent path includes the Arcify folder
-        // This is a simplified check - for a more robust solution, we'd need to traverse up the parent chain
-        return bookmark.parentId && (bookmark.parentId === arcifyFolderId || 
-               bookmark.parentId.startsWith(arcifyFolderId));
+        const bookmarks = await chrome.bookmarks.search(query);
+        return bookmarks.filter(bookmark => Boolean(bookmark.url));
     }
 
     async getHistoryData(query) {
@@ -103,67 +96,39 @@ export class BackgroundDataProvider extends BaseDataProvider {
     }
 
     async getPinnedTabsData(query = '') {
-        Logger.log('[BackgroundDataProvider] getPinnedTabsData called with query:', query);
         try {
             const sidebarState = await Utils.getSidebarState();
-            Logger.log('[BackgroundDataProvider] Loaded collection state:', sidebarState?.name);
-            
-            // Get current tabs
             const tabs = await chrome.tabs.query({});
-            Logger.log('[BackgroundDataProvider] Found tabs:', tabs.length);
-            
-            // Get Arcify folder structure using robust method
-            const arcifyFolder = await BookmarkUtils.findArcifyFolder();
-            if (!arcifyFolder) {
-                Logger.log('[BackgroundDataProvider] No Arcify folder found');
-                return [];
-            }
-            Logger.log('[BackgroundDataProvider] Found Arcify folder:', arcifyFolder.id);
-
-            const collectionFolders = await chrome.bookmarks.getChildren(arcifyFolder.id);
-            Logger.log('[BackgroundDataProvider] Found collection folders:', collectionFolders.length, collectionFolders.map(f => f.title));
-            const pinnedTabs = [];
-
-            // Process each collection folder
-            for (const collectionFolder of collectionFolders) {
-                const collection = sidebarState;
-                Logger.log('[BackgroundDataProvider] Processing collection folder:', collectionFolder.title);
-
-                // Get all bookmarks in this collection folder (recursively)
-                const bookmarks = await BookmarkUtils.getBookmarksFromFolderRecursive(collectionFolder.id);
-                Logger.log('[BackgroundDataProvider] Found bookmarks in', collectionFolder.title, ':', bookmarks.length);
-                
-                for (const bookmark of bookmarks) {
-                    // Check if there's a matching open tab
-                    const matchingTab = BookmarkUtils.findTabByUrl(tabs, bookmark.url);
-                    Logger.log('[BackgroundDataProvider] Processing bookmark:', bookmark.title, 'matching tab:', !!matchingTab);
-                    
-                    // Apply query filter
-                    if (query) {
-                        const queryLower = query.toLowerCase();
-                        const titleMatch = bookmark.title.toLowerCase().includes(queryLower);
-                        const urlMatch = bookmark.url.toLowerCase().includes(queryLower);
-                        if (!titleMatch && !urlMatch) {
-                            Logger.log('[BackgroundDataProvider] Bookmark filtered out by query:', bookmark.title);
-                            continue;
-                        }
-                    }
-
-                    const pinnedTab = {
-                        ...bookmark,
-                        collectionId: collection.id,
-                        collectionName: collection.name,
-                        collectionColor: collection.color,
-                        tabId: matchingTab?.id || null,
-                        isActive: !!matchingTab
-                    };
-                    Logger.log('[BackgroundDataProvider] Adding pinned tab:', pinnedTab);
-                    pinnedTabs.push(pinnedTab);
+            const pinnedStatesById = await Utils.getPinnedTabStates();
+            const pinnedLinks = [];
+            Utils.walkPinnedItems(sidebarState.pinnedItems, item => {
+                if (item?.type === 'link' && item.url) {
+                    pinnedLinks.push(item);
                 }
-            }
+            });
 
-            Logger.log('[BackgroundDataProvider] Returning', pinnedTabs.length, 'pinned tabs');
-            return pinnedTabs;
+            const normalizedQuery = query.trim().toLowerCase();
+            const claimedTabIds = new Set();
+            return pinnedLinks
+                .filter(item => !normalizedQuery ||
+                    item.title.toLowerCase().includes(normalizedQuery) ||
+                    item.url.toLowerCase().includes(normalizedQuery))
+                .map(item => {
+                    const matchingTab = tabs.find(tab =>
+                        !claimedTabIds.has(tab.id) &&
+                        pinnedStatesById?.[tab.id]?.pinnedItemId === item.id
+                    ) || tabs.find(tab =>
+                        !claimedTabIds.has(tab.id) &&
+                        !pinnedStatesById?.[tab.id]?.pinnedItemId &&
+                        tab.url === item.url
+                    );
+                    if (matchingTab) claimedTabIds.add(matchingTab.id);
+                    return {
+                        ...item,
+                        tabId: matchingTab?.id || null,
+                        isActive: Boolean(matchingTab)
+                    };
+                });
         } catch (error) {
             Logger.error('[BackgroundDataProvider] Error getting pinned tabs data:', error);
             return [];

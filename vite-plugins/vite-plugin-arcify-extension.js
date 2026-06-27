@@ -251,11 +251,3 @@ export function createArcifyConfig(options = {}) {
 
   return config;
 }
-
-/**
- * Legacy function for backward compatibility
- * @deprecated Use createArcifyConfig instead
- */
-export function arcifyExtensionPlugin(options = {}) {
-  return getExtensionPlugins(options.isDev);
-}

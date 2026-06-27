@@ -34,6 +34,87 @@ let tabSwitcherSession = null;
 const tabPreviewCache = new Map();
 const pendingTabSwitcherHideTimers = new Map();
 
+function getOrigin(url) {
+    if (!url) return null;
+    try {
+        return new URL(url).origin;
+    } catch {
+        return null;
+    }
+}
+
+async function getPinnedNavigationGuardStateForTab(tabId) {
+    if (!tabId) {
+        return { enabled: false, pinnedUrl: null, pinnedOrigin: null };
+    }
+
+    const pinnedState = await Utils.getPinnedTabState(tabId);
+    const pinnedUrl = pinnedState?.pinnedUrl || null;
+    const pinnedOrigin = getOrigin(pinnedUrl);
+
+    return {
+        enabled: Boolean(pinnedUrl && pinnedOrigin),
+        pinnedUrl,
+        pinnedOrigin
+    };
+}
+
+async function sendPinnedNavigationGuardState(tabId) {
+    if (!tabId) return;
+
+    let tab = null;
+    try {
+        tab = await chrome.tabs.get(tabId);
+    } catch {
+        return;
+    }
+
+    if (!supportsContentScripts(tab?.url)) {
+        return;
+    }
+
+    const message = {
+        action: 'updatePinnedNavigationGuard',
+        ...(await getPinnedNavigationGuardStateForTab(tabId))
+    };
+
+    try {
+        const response = await chrome.tabs.sendMessage(tabId, message);
+        if (response?.success) {
+            return;
+        }
+    } catch {
+        // Existing pages lose their content-script context when the extension reloads.
+    }
+
+    try {
+        await chrome.scripting.executeScript({
+            target: { tabId },
+            files: ['spotlight/overlay.js']
+        });
+        await chrome.tabs.sendMessage(tabId, message);
+    } catch {
+        // The page may reject content-script injection.
+    }
+}
+
+async function openPinnedNavigationLink({ sourceTabId, url }) {
+    if (!sourceTabId || !url) {
+        throw new Error('Missing sourceTabId or url');
+    }
+
+    const sourceTab = await chrome.tabs.get(sourceTabId);
+    const createdTab = await chrome.tabs.create({
+        windowId: sourceTab.windowId,
+        index: typeof sourceTab.index === 'number' ? sourceTab.index + 1 : undefined,
+        openerTabId: sourceTabId,
+        url,
+        active: true
+    });
+
+    return { tabId: createdTab.id };
+}
+
 // Helper to handle async message responses with consistent error handling
 function handleAsyncMessage(handler, sendResponse, errorContext, defaultErrorData = {}) {
     (async () => {
@@ -81,37 +162,9 @@ if (chrome.contextMenus) {
     });
 }
 
-// Listen for messages from the content script (sidebar)
-chrome.runtime.onMessage.addListener(async function (request, sender, sendResponse) {
-    if (request.command === "toggleSpotlight") {
-        await injectSpotlightScript(SpotlightTabMode.CURRENT_TAB);
-    } else if (request.command === "toggleSpotlightNewTab") {
-        await injectSpotlightScript(SpotlightTabMode.NEW_TAB);
-    }
-});
-
 chrome.commands.onCommand.addListener(async function (command) {
-    if (command === "quickPinToggle") {
-        // Send a message to the sidebar
-        chrome.runtime.sendMessage({ command: "quickPinToggle" });
-    } else if (command === "recentTabSwitcher") {
+    if (command === "recentTabSwitcher") {
         await switchRecentTab();
-    } else if (command === "NextTabInCollection") {
-        Utils.findActiveSidebarTab().then(async ({ state, tab } = {}) => {
-            if (state) {
-                await Utils.moveToNextTabInSidebar(tab.id, state);
-            }
-        });
-    }
-    else if (command === "PrevTabInCollection") {
-        Utils.findActiveSidebarTab().then(async ({ state, tab } = {}) => {
-            if (state) {
-                await Utils.moveToPrevTabInSidebar(tab.id, state);
-            }
-        });
-        Logger.log("sending");
-        // Send a message to the sidebar
-        chrome.runtime.sendMessage({ command: "PrevTabInCollection" });
     } else if (command === "toggleSpotlight") {
         await injectSpotlightScript(SpotlightTabMode.CURRENT_TAB);
     } else if (command === "toggleSpotlightNewTab") {
@@ -158,8 +211,13 @@ async function getRecentTabsForWindow(windowId, activeTabId) {
         });
 }
 
-async function captureActiveTabPreview(windowId) {
+async function captureActiveTabPreview(windowId, activeTabId = null) {
     try {
+        const resolvedActiveTabId = activeTabId ?? (await chrome.tabs.query({ active: true, windowId }))[0]?.id ?? null;
+        if (resolvedActiveTabId) {
+            await hideTabSwitcherOverlay(resolvedActiveTabId);
+            await new Promise(resolve => setTimeout(resolve, 5));
+        }
         const dataUrl = await chrome.tabs.captureVisibleTab(windowId, {
             format: 'jpeg',
             quality: 45
@@ -331,7 +389,7 @@ async function switchRecentTab() {
         return;
     }
 
-    await captureActiveTabPreview(activeTab.windowId);
+    await captureActiveTabPreview(activeTab.windowId, activeTab.id);
 
     let sessionTabs = tabSwitcherSession?.tabs || null;
     if (!tabSwitcherSession || tabSwitcherSession.windowId !== activeTab.windowId) {
@@ -736,8 +794,7 @@ async function runAutoArchiveCheck() {
         for (const tab of tabsToArchive) {
             const tabData = {
                 url: tab.url,
-                name: tab.title || tab.url, // Use URL if title is empty
-                collectionId: 'main'
+                name: tab.title || tab.url
             };
             await Utils.addArchivedTab(tabData);
             await chrome.tabs.remove(tab.id);
@@ -776,6 +833,19 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === 'local' && TAB_ACTIVITY_STORAGE_KEY in changes) {
         // This might be less reliable than using tab removal events
     }
+
+    if (areaName === 'local' && changes.pinnedTabStatesById) {
+        const oldStates = changes.pinnedTabStatesById.oldValue || {};
+        const newStates = changes.pinnedTabStatesById.newValue || {};
+        const changedTabIds = new Set([
+            ...Object.keys(oldStates),
+            ...Object.keys(newStates)
+        ]);
+
+        changedTabIds.forEach(tabId => {
+            sendPinnedNavigationGuardState(parseInt(tabId, 10));
+        });
+    }
 });
 
 // Track tab activation
@@ -784,6 +854,8 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 
     // Close any open spotlights when switching tabs
     await closeSpotlightInTrackedTabs();
+
+    await sendPinnedNavigationGuardState(activeInfo.tabId);
 });
 
 // Track tab updates (e.g., audible status changes)
@@ -793,6 +865,10 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
         if (tab.active || tab.audible) {
             await updateTabLastActivity(tabId);
         }
+    }
+
+    if (changeInfo.status === 'loading' || changeInfo.status === 'complete') {
+        await sendPinnedNavigationGuardState(tabId);
     }
 });
 
@@ -812,7 +888,13 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
 // Optional: Listen for messages from options page to immediately update alarm
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
-    if (message.action === 'updateAutoArchiveSettings') {
+    if (message.command === 'toggleSpotlight') {
+        void injectSpotlightScript(SpotlightTabMode.CURRENT_TAB);
+        return false;
+    } else if (message.command === 'toggleSpotlightNewTab') {
+        void injectSpotlightScript(SpotlightTabMode.NEW_TAB);
+        return false;
+    } else if (message.action === 'updateAutoArchiveSettings') {
         Logger.log("Received message to update auto-archive settings.");
         setupAutoArchiveAlarm();
         sendResponse({ success: true });
@@ -821,6 +903,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         chrome.tabs.create({ url: message.url });
         sendResponse({ success: true });
         return false; // Synchronous response
+    } else if (message.action === 'getPinnedNavigationGuardState') {
+        return handleAsyncMessage(async () => {
+            const tabId = sender.tab?.id;
+            return await getPinnedNavigationGuardStateForTab(tabId);
+        }, sendResponse, 'getting pinned navigation guard state');
+    } else if (message.action === 'ensurePinnedNavigationGuard') {
+        return handleAsyncMessage(async () => {
+            await sendPinnedNavigationGuardState(message.tabId);
+            return {};
+        }, sendResponse, 'ensuring pinned navigation guard');
+    } else if (message.action === 'openPinnedNavigationLink') {
+        return handleAsyncMessage(async () => {
+            return await openPinnedNavigationLink({
+                sourceTabId: sender.tab?.id,
+                url: message.url
+            });
+        }, sendResponse, 'opening pinned navigation link', { tabId: null });
     } else if (message.action === 'navigateToDefaultNewTab') {
         // Handle navigation to default new tab when custom new tab is disabled
         (async () => {

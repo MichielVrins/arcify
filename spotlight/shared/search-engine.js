@@ -145,32 +145,15 @@ export class SearchEngine {
 
                 case ResultType.PINNED_TAB:
                     Logger.log('[SearchEngine] Handling PINNED_TAB result:', result);
-                    if (!result.metadata?.collectionId) {
-                        throw new Error('PINNED_TAB result missing collectionId in metadata');
-                    }
 
                     const pinnedTabMessage = {
                         action: 'activatePinnedTab',
-                        collectionId: result.metadata.collectionId,
-                        collectionName: result.metadata.collectionName,
-                        bookmarkUrl: result.url,
+                        pinnedItemId: result.metadata?.pinnedItemId,
+                        pinnedUrl: result.url,
                         mode: mode
                     };
                     Logger.log('[SearchEngine] Sending activatePinnedTab message:', pinnedTabMessage);
-
-                    // Send message to sidebar to handle pinned tab activation
-                    if (this.isBackgroundContext) {
-                        // Send message to sidebar via runtime messaging
-                        chrome.runtime.sendMessage(pinnedTabMessage);
-                        Logger.log('[SearchEngine] Message sent from background context');
-                    } else {
-                        // From content script, send message to background which will forward to sidebar
-                        const response = await chrome.runtime.sendMessage(pinnedTabMessage);
-                        Logger.log('[SearchEngine] Message sent from content script, response:', response);
-                        if (!response?.success) {
-                            throw new Error('Failed to activate pinned tab');
-                        }
-                    }
+                    await chrome.runtime.sendMessage(pinnedTabMessage);
                     break;
 
                 case ResultType.URL_SUGGESTION:

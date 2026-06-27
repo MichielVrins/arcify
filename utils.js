@@ -45,6 +45,9 @@ function normalizePinnedItems(items) {
                 normalized.children = normalizePinnedItems(item.children);
             } else {
                 normalized.url = item.url || '';
+                normalized.customTitle = item.customTitle === undefined
+                    ? true
+                    : Boolean(item.customTitle);
                 normalized.placement = item.placement === PINNED_ITEM_PLACEMENTS.FAVORITE
                     ? PINNED_ITEM_PLACEMENTS.FAVORITE
                     : PINNED_ITEM_PLACEMENTS.SIDEBAR;
@@ -53,44 +56,6 @@ function normalizePinnedItems(items) {
             return normalized;
         })
         .filter(Boolean);
-}
-
-function normalizeLegacyFavorites(items) {
-    if (!Array.isArray(items)) return [];
-
-    return items
-        .map(item => {
-            if (!item || typeof item !== 'object' || !item.url) return null;
-            return {
-                id: item.id || crypto.randomUUID?.() || `item-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-                type: PINNED_ITEM_TYPES.LINK,
-                title: item.title || 'Favorite',
-                url: item.url,
-                placement: PINNED_ITEM_PLACEMENTS.FAVORITE
-            };
-        })
-        .filter(Boolean);
-}
-
-function mergeLegacyFavoritesIntoPinnedItems(pinnedItems, favoriteItems) {
-    const normalizedPinnedItems = normalizePinnedItems(pinnedItems);
-    const normalizedFavorites = normalizeLegacyFavorites(favoriteItems);
-
-    if (normalizedFavorites.length === 0) {
-        return normalizedPinnedItems;
-    }
-
-    const merged = [...normalizedPinnedItems];
-    normalizedFavorites.reverse().forEach(favorite => {
-        const existing = merged.find(item => item?.type === PINNED_ITEM_TYPES.LINK && item.url === favorite.url);
-        if (existing) {
-            existing.placement = PINNED_ITEM_PLACEMENTS.FAVORITE;
-            return;
-        }
-        merged.unshift(favorite);
-    });
-
-    return normalizePinnedItems(merged);
 }
 
 const Utils = {
@@ -155,20 +120,17 @@ const Utils = {
 
     getSidebarState: async function () {
         const result = await chrome.storage.local.get([SIDEBAR_STATE_KEY]);
-        const migrated = result[SIDEBAR_STATE_KEY] || await this.getDefaultSidebarState();
-        const mergedPinnedItems = mergeLegacyFavoritesIntoPinnedItems(migrated?.pinnedItems, migrated?.favoriteItems);
+        const defaultState = await this.getDefaultSidebarState();
+        const storedState = result[SIDEBAR_STATE_KEY] || defaultState;
 
-        const normalized = {
-            ...(await this.getDefaultSidebarState()),
-            ...migrated,
+        return {
+            ...defaultState,
+            ...storedState,
             id: MAIN_SIDEBAR_ID,
-            pinnedItems: mergedPinnedItems,
-            pinnedTabIds: Array.isArray(migrated?.pinnedTabIds) ? migrated.pinnedTabIds : [],
-            temporaryTabs: Array.isArray(migrated?.temporaryTabs) ? migrated.temporaryTabs : []
+            pinnedItems: normalizePinnedItems(storedState?.pinnedItems),
+            pinnedTabIds: Array.isArray(storedState?.pinnedTabIds) ? storedState.pinnedTabIds : [],
+            temporaryTabs: Array.isArray(storedState?.temporaryTabs) ? storedState.temporaryTabs : []
         };
-
-        await this.saveSidebarState(normalized);
-        return normalized;
     },
 
     saveSidebarState: async function (sidebarState) {
@@ -311,12 +273,13 @@ const Utils = {
         return removed || null;
     },
 
-    createPinnedLinkItem: function ({ id, title, url }) {
+    createPinnedLinkItem: function ({ id, title, url, customTitle = false }) {
         return {
             id: id || this.generateUUID(),
             type: PINNED_ITEM_TYPES.LINK,
             title: title || 'Bookmark',
             url: url || '',
+            customTitle: Boolean(customTitle),
             placement: PINNED_ITEM_PLACEMENTS.SIDEBAR
         };
     },
@@ -376,7 +339,7 @@ const Utils = {
     },
 
     // Add a tab to the archive
-    addArchivedTab: async function (tabData) { // tabData = { url, name, sidebarId, archivedAt }
+    addArchivedTab: async function (tabData) {
         if (!tabData || !tabData.url || !tabData.name) return;
 
         const archivedTabs = await this.getArchivedTabs();
@@ -389,7 +352,11 @@ const Utils = {
         }
 
         // Add new tab with timestamp
-        const newArchiveEntry = { ...tabData, collectionId: tabData.collectionId || MAIN_SIDEBAR_ID, archivedAt: Date.now() };
+        const newArchiveEntry = {
+            url: tabData.url,
+            name: tabData.name,
+            archivedAt: Date.now()
+        };
         archivedTabs.push(newArchiveEntry);
 
         // Sort by timestamp (newest first for potential slicing, though FIFO means oldest removed)
@@ -401,7 +368,7 @@ const Utils = {
         }
 
         await this.saveArchivedTabs(archivedTabs);
-        Logger.log(`Archived tab: ${tabData.name} from sidebar ${newArchiveEntry.collectionId}`);
+        Logger.log(`Archived tab: ${tabData.name}`);
     },
 
     // Function to archive a tab (likely called from context menu)
@@ -412,8 +379,7 @@ const Utils = {
 
             const tabData = {
                 url: tab.url,
-                name: tab.title,
-                collectionId: MAIN_SIDEBAR_ID
+                name: tab.title
             };
 
             await this.addArchivedTab(tabData);
@@ -426,13 +392,13 @@ const Utils = {
     },
 
     // Remove a tab from the archive (e.g., after restoration)
-    removeArchivedTab: async function (url, collectionId = MAIN_SIDEBAR_ID) {
+    removeArchivedTab: async function (url) {
         if (!url) return;
 
         let archivedTabs = await this.getArchivedTabs();
-        archivedTabs = archivedTabs.filter(tab => !(tab.url === url && (tab.collectionId || MAIN_SIDEBAR_ID) === collectionId));
+        archivedTabs = archivedTabs.filter(tab => tab.url !== url);
         await this.saveArchivedTabs(archivedTabs);
-        Logger.log(`Removed archived tab: ${url} from sidebar ${collectionId}`);
+        Logger.log(`Removed archived tab: ${url}`);
     },
 
     restoreArchivedTab: async function (archivedTabData) {
@@ -443,7 +409,7 @@ const Utils = {
             });
 
             // Remove from archive storage
-            await this.removeArchivedTab(archivedTabData.url, archivedTabData.collectionId || MAIN_COLLECTION_ID);
+            await this.removeArchivedTab(archivedTabData.url);
 
             // Return the created tab so caller can pin it if needed
             return newTab;
@@ -464,53 +430,6 @@ const Utils = {
         const settings = await this.getSettings();
         settings.autoArchiveIdleMinutes = minutes;
         await chrome.storage.sync.set({ autoArchiveIdleMinutes: minutes });
-    },
-
-    // Navigate to adjacent tab within the single Arcify sidebar
-    _navigateTabInState: async function (tabId, sidebarState, direction) {
-        const temporaryTabs = sidebarState?.temporaryTabs ?? [];
-        const pinnedTabs = sidebarState?.pinnedTabIds ?? [];
-        const allTabs = [...pinnedTabs, ...temporaryTabs];
-
-        if (allTabs.length === 0) return;
-
-        const currentIndex = allTabs.indexOf(tabId);
-        if (currentIndex === -1) return;
-
-        const nextIndex = direction === 'next'
-            ? (currentIndex + 1) % allTabs.length
-            : (currentIndex - 1 + allTabs.length) % allTabs.length;
-
-        chrome.tabs.update(allTabs[nextIndex], { active: true });
-    },
-
-    moveToNextTabInSidebar: async function (tabId, sidebarState) {
-        return this._navigateTabInState(tabId, sidebarState, 'next');
-    },
-
-    moveToPrevTabInSidebar: async function (tabId, sidebarState) {
-        return this._navigateTabInState(tabId, sidebarState, 'prev');
-    },
-    findActiveSidebarTab: async function () {
-        Logger.log("[TabNavigation] finding active tab in sidebar state");
-        const sidebarState = await this.getSidebarState();
-        const foundTabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (foundTabs.length === 0) {
-            Logger.log("[TabNavigation] No active tab found!:");
-            return undefined;
-        }
-        const foundTab = foundTabs[0];
-        if (sidebarState.temporaryTabs.includes(foundTab.id)) {
-            Logger.log(`[TabNavigation] Tab ${foundTab.id} is a temporary tab in the main sidebar.`);
-            return { state: sidebarState, tab: foundTab };
-        }
-
-        if (sidebarState.pinnedTabIds.includes(foundTab.id)) {
-            Logger.log(`[TabNavigation] Tab ${foundTab.id} is a pinned tab in the main sidebar.`);
-            return { state: sidebarState, tab: foundTab };
-        }
-
-        return undefined
     },
 
     // Helper function to adjust menu position to keep it within viewport

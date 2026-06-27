@@ -76,7 +76,8 @@ export function showTabContextMenu(
 ) {
     const {
         showAddToFavorites = true,
-        showPinOption = true
+        showPinOption = true,
+        onRename = null
     } = options;
 
     // Remove any existing context menus
@@ -93,6 +94,17 @@ export function showTabContextMenu(
     contextMenu.style.top = `${y}px`;
 
     // --- Menu Items ---
+
+    if (isPinned && typeof onRename === 'function') {
+        const renameOption = document.createElement('div');
+        renameOption.className = 'context-menu-item';
+        renameOption.textContent = 'Rename';
+        renameOption.addEventListener('click', () => {
+            onRename();
+            contextMenu.remove();
+        });
+        contextMenu.appendChild(renameOption);
+    }
 
     // Only show these options for actual tabs managed by Arcify
     if (!isBookmarkOnly && showAddToFavorites) {
@@ -397,6 +409,9 @@ export function clearAllActiveStates() {
 export function hideAllDropIndicators() {
     document.querySelectorAll('.drop-indicator-horizontal, .drop-indicator-vertical').forEach(element => {
         element.classList.remove('drop-indicator-horizontal', 'drop-indicator-vertical', 'above', 'below', 'left', 'right');
+    });
+    document.querySelectorAll('.drop-target-inside').forEach(element => {
+        element.classList.remove('drop-target-inside');
     });
 }
 

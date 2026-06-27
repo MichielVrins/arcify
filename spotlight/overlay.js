@@ -20,6 +20,90 @@ import { SpotlightTabMode } from './shared/search-types.js';
 import { SharedSpotlightLogic } from './shared/shared-component-logic.js';
 import { Logger } from '../logger.js';
 
+const pinnedNavigationGuard = window.arcifyPinnedNavigationGuard || {
+    enabled: false,
+    pinnedUrl: null,
+    pinnedOrigin: null
+};
+window.arcifyPinnedNavigationGuard = pinnedNavigationGuard;
+
+function setPinnedNavigationGuardState(nextState = {}) {
+    pinnedNavigationGuard.enabled = Boolean(nextState.enabled && nextState.pinnedUrl && nextState.pinnedOrigin);
+    pinnedNavigationGuard.pinnedUrl = nextState.pinnedUrl || null;
+    pinnedNavigationGuard.pinnedOrigin = nextState.pinnedOrigin || null;
+}
+
+function isSupportedGuardUrl(url) {
+    return typeof url === 'string' && /^(https?:)?\/\//i.test(url);
+}
+
+function shouldIgnoreGuardedClick(event, anchor) {
+    if (!anchor) return true;
+    if (event.defaultPrevented || event.button !== 0) return true;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return true;
+    if (anchor.target && anchor.target !== '_self') return true;
+    if (anchor.hasAttribute('download')) return true;
+    return false;
+}
+
+function shouldOpenLinkOutsidePinnedTab(destinationUrl) {
+    if (!pinnedNavigationGuard.enabled || !pinnedNavigationGuard.pinnedOrigin || !isSupportedGuardUrl(destinationUrl)) {
+        return false;
+    }
+
+    try {
+        return new URL(destinationUrl, window.location.href).origin !== pinnedNavigationGuard.pinnedOrigin;
+    } catch {
+        return false;
+    }
+}
+
+async function syncPinnedNavigationGuardState() {
+    try {
+        const response = await chrome.runtime.sendMessage({ action: 'getPinnedNavigationGuardState' });
+        if (response?.success) {
+            setPinnedNavigationGuardState(response);
+        }
+    } catch (error) {
+        Logger.log('[PinnedNavigationGuard] Failed to sync state:', error);
+    }
+}
+
+async function handlePinnedNavigationClick(event) {
+    const anchor = event.target instanceof Element ? event.target.closest('a[href]') : null;
+    if (shouldIgnoreGuardedClick(event, anchor)) {
+        return;
+    }
+
+    const href = anchor.href;
+    if (!shouldOpenLinkOutsidePinnedTab(href)) {
+        return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    try {
+        await chrome.runtime.sendMessage({
+            action: 'openPinnedNavigationLink',
+            url: href
+        });
+    } catch (error) {
+        Logger.log('[PinnedNavigationGuard] Failed to open outbound link in new tab:', error);
+        window.location.href = href;
+    }
+}
+
+if (window.arcifyPinnedNavigationClickListener) {
+    try {
+        document.removeEventListener('click', window.arcifyPinnedNavigationClickListener, true);
+    } catch {
+        // A listener from an invalidated extension context can be discarded.
+    }
+}
+window.arcifyPinnedNavigationClickListener = handlePinnedNavigationClick;
+document.addEventListener('click', handlePinnedNavigationClick, true);
+
 /**
  * DORMANT CONTENT SCRIPT ARCHITECTURE
  * 
@@ -36,23 +120,31 @@ import { Logger } from '../logger.js';
  * - Graceful fallback to legacy injection for compatibility
  */
 
-// Dormant mode: Listen for activation message when loaded as content script
-// Only set up listener if NOT already activated by legacy injection method
-if (!window.arcifySpotlightTabMode) {
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-        if (message.action === 'activateSpotlight') {
-            // Set up activation variables exactly like legacy background script injection
-            // These variables are used throughout the spotlight code for context
-            window.arcifySpotlightTabMode = message.mode;
-            window.arcifyCurrentTabUrl = message.tabUrl;
-            window.arcifyCurrentTabId = message.tabId;
+function handleArcifyRuntimeMessage(message, sender, sendResponse) {
+    if (message.action === 'activateSpotlight') {
+        window.arcifySpotlightTabMode = message.mode;
+        window.arcifyCurrentTabUrl = message.tabUrl;
+        window.arcifyCurrentTabId = message.tabId;
 
-            // Instantly activate spotlight (no injection delay!)
-            activateSpotlight(message.mode);
-            sendResponse({ success: true });
-        }
-    });
+        activateSpotlight(message.mode);
+        sendResponse({ success: true });
+    } else if (message.action === 'updatePinnedNavigationGuard') {
+        setPinnedNavigationGuardState(message);
+        sendResponse({ success: true });
+    }
 }
+
+if (window.arcifyRuntimeMessageListener) {
+    try {
+        chrome.runtime.onMessage.removeListener(window.arcifyRuntimeMessageListener);
+    } catch {
+        // A listener from an invalidated extension context can be discarded.
+    }
+}
+window.arcifyRuntimeMessageListener = handleArcifyRuntimeMessage;
+chrome.runtime.onMessage.addListener(handleArcifyRuntimeMessage);
+
+syncPinnedNavigationGuardState();
 
 // Main spotlight activation function
 async function activateSpotlight(spotlightTabMode = 'current-tab') {

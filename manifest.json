@@ -6,7 +6,6 @@
   "permissions": [
     "tabs",
     "activeTab",
-    "tabGroups",
     "sidePanel",
     "storage",
     "bookmarks",
@@ -72,15 +71,6 @@
         "default": "Alt+S"
       },
       "description": "Toggle side panel"
-    },
-    "quickPinToggle": {
-      "description": "Quick Pin/Unpin Tab"
-    },
-    "NextTabInCollection": {
-      "description": "Navigates to next tab in collection"
-    },
-    "PrevTabInCollection": {
-      "description": "Navigates to prev tab in collection"
     },
     "toggleSpotlight": {
       "suggested_key": {

@@ -204,10 +204,7 @@ export class BaseDataProvider {
                     title: pinnedTab.title,
                     url: pinnedTab.url,
                     metadata: { 
-                        bookmarkId: pinnedTab.id,
-                        collectionId: pinnedTab.collectionId,
-                        collectionName: pinnedTab.collectionName,
-                        collectionColor: pinnedTab.collectionColor,
+                        pinnedItemId: pinnedTab.id,
                         tabId: pinnedTab.tabId,
                         isActive: pinnedTab.isActive
                     }
