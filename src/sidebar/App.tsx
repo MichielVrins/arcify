@@ -7,6 +7,7 @@ import {
   useSensors,
   type DragCancelEvent,
   type DragEndEvent,
+  type DragOverEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
 import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
@@ -64,6 +65,7 @@ export interface SidebarAppProps {
 
 export function SidebarApp(props: SidebarAppProps) {
   const [activeDrag, setActiveDrag] = useState<DragItem | null>(null);
+  const [dropIndicator, setDropIndicator] = useState<CSSProperties | null>(null);
   const layoutPositions = useRef(new Map<string, DOMRect>());
   const animateNextLayout = useRef(false);
   const sensors = useSensors(
@@ -124,6 +126,7 @@ export function SidebarApp(props: SidebarAppProps) {
   const handleDragEnd = async (event: DragEndEvent) => {
     const active = event.active.data.current as DragItem | undefined;
     const target = event.over?.data.current as DropTarget | undefined;
+    setDropIndicator(null);
     if (active && target) {
       animateNextLayout.current = true;
       await props.onDragEnd(active, target);
@@ -135,7 +138,39 @@ export function SidebarApp(props: SidebarAppProps) {
     setActiveDrag((event.active.data.current as DragItem | undefined) || null);
   };
 
-  const handleDragCancel = (_event: DragCancelEvent) => setActiveDrag(null);
+  const handleDragOver = (event: DragOverEvent) => {
+    const over = event.over;
+    if (!over || String(over.id).startsWith('folder-inside:')) {
+      setDropIndicator(null);
+      return;
+    }
+    const target = over.data.current as DropTarget | undefined;
+    const rect = over.rect;
+    if (!target) {
+      setDropIndicator(null);
+      return;
+    }
+    if (target.area === 'favorite') {
+      setDropIndicator({
+        left: rect.left + rect.width / 2 - 1,
+        top: rect.top + 4,
+        width: 2,
+        height: Math.max(0, rect.height - 8),
+      });
+      return;
+    }
+    setDropIndicator({
+      left: rect.left,
+      top: rect.top + rect.height / 2 - 1,
+      width: rect.width,
+      height: 2,
+    });
+  };
+
+  const handleDragCancel = (_event: DragCancelEvent) => {
+    setDropIndicator(null);
+    setActiveDrag(null);
+  };
 
   const dragPreview = (() => {
     if (!activeDrag) return null;
@@ -167,6 +202,7 @@ export function SidebarApp(props: SidebarAppProps) {
       sensors={sensors}
       collisionDetection={pointerWithin}
       onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
       onDragCancel={handleDragCancel}
       onDragEnd={handleDragEnd}
     >
@@ -219,6 +255,9 @@ export function SidebarApp(props: SidebarAppProps) {
           onDeleteFolder={props.onMenuDeleteFolder}
         />
       </div>
+      {dropIndicator ? (
+        <div className="shared-drop-indicator" style={dropIndicator} />
+      ) : null}
       <DragOverlay dropAnimation={null}>{dragPreview}</DragOverlay>
     </DndContext>
   );

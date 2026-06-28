@@ -143,14 +143,11 @@ interface DropZoneProps {
 }
 
 export function DropZone({ id, target, horizontal = false }: DropZoneProps) {
-  const { isOver, setNodeRef } = useDroppable({ id, data: target });
+  const { setNodeRef } = useDroppable({ id, data: target });
   return (
     <div
       ref={setNodeRef}
-      className={[
-        horizontal ? 'react-drop-zone-horizontal' : 'react-drop-zone',
-        isOver ? 'active' : '',
-      ].join(' ')}
+      className={horizontal ? 'react-drop-zone-horizontal' : 'react-drop-zone'}
       aria-hidden="true"
     />
   );
