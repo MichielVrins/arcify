@@ -2,49 +2,63 @@
  * Utils - Shared utility functions and storage management
  * 
  * Purpose: Provides common utilities and centralized settings/storage management across the extension
- * Key Functions: Settings CRUD, archived tabs management, space data operations, default configurations
+ * Key Functions: Settings CRUD, archived tabs management, sidebar state operations, default configurations
  * Architecture: Static utility class with async storage operations
  * 
  * Critical Notes:
  * - Central source of truth for extension settings and defaults
- * - Handles both chrome.storage.sync (settings) and chrome.storage.local (spaces/tabs data)
+ * - Handles both chrome.storage.sync (settings) and chrome.storage.local (sidebar/tab data)
  * - Used by both background script and UI components for consistent data access
  * - Settings changes automatically sync across extension contexts
  */
 
-import { BookmarkUtils } from './bookmark-utils.js';
 import { Logger } from './logger.js';
 
 const MAX_ARCHIVED_TABS = 100;
 const ARCHIVED_TABS_KEY = 'archivedTabs';
+const SIDEBAR_STATE_KEY = 'sidebarState';
+const MAIN_SIDEBAR_ID = 'main';
+const PINNED_ITEM_TYPES = {
+    LINK: 'link',
+    FOLDER: 'folder'
+};
+const PINNED_ITEM_PLACEMENTS = {
+    SIDEBAR: 'sidebar',
+    FAVORITE: 'favorite'
+};
+
+function normalizePinnedItems(items) {
+    if (!Array.isArray(items)) return [];
+
+    return items
+        .map(item => {
+            if (!item || typeof item !== 'object') return null;
+
+            const type = item.type === PINNED_ITEM_TYPES.FOLDER ? PINNED_ITEM_TYPES.FOLDER : PINNED_ITEM_TYPES.LINK;
+            const normalized = {
+                id: item.id || crypto.randomUUID?.() || `item-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+                type,
+                title: item.title || (type === PINNED_ITEM_TYPES.FOLDER ? 'Untitled' : 'Bookmark')
+            };
+
+            if (type === PINNED_ITEM_TYPES.FOLDER) {
+                normalized.children = normalizePinnedItems(item.children);
+            } else {
+                normalized.url = item.url || '';
+                normalized.customTitle = item.customTitle === undefined
+                    ? true
+                    : Boolean(item.customTitle);
+                normalized.placement = item.placement === PINNED_ITEM_PLACEMENTS.FAVORITE
+                    ? PINNED_ITEM_PLACEMENTS.FAVORITE
+                    : PINNED_ITEM_PLACEMENTS.SIDEBAR;
+            }
+
+            return normalized;
+        })
+        .filter(Boolean);
+}
 
 const Utils = {
-
-    processBookmarkFolder: async function (folder, groupId) {
-        const bookmarks = [];
-        const items = await chrome.bookmarks.getChildren(folder.id);
-        const tabs = await chrome.tabs.query({ groupId: groupId });
-        for (const item of items) {
-            if (item.url) {
-                // This is a bookmark
-                const tab = tabs.find(t => t.url === item.url);
-                if (tab) {
-                    bookmarks.push(tab.id);
-                    // Set tab name override with the bookmark's title
-                    if (item.title && item.title !== tab.title) { // Only override if bookmark title is present and different
-                        await this.setTabNameOverride(tab.id, tab.url, item.title);
-                        Logger.log(`Override set for tab ${tab.id} from bookmark: ${item.title}`);
-                    }
-                }
-            } else {
-                // This is a folder, recursively process it
-                const subFolderBookmarks = await this.processBookmarkFolder(item, groupId);
-                bookmarks.push(...subFolderBookmarks);
-            }
-        }
-
-        return bookmarks;
-    },
 
     // Helper function to generate UUID (If you want to move this too)
     generateUUID: function () {
@@ -77,11 +91,9 @@ const Utils = {
 
     getSettings: async function () {
         const defaultSettings = {
-            defaultSpaceName: 'Home',
             autoArchiveEnabled: false, // Default: disabled
             autoArchiveIdleMinutes: 360, // Default: 30 minutes
             enableSpotlight: true, // Default: enabled (controls both spotlight and custom new tab)
-            invertTabOrder: true, // Default: enabled (New tabs/High index on top)
             colorOverrides: null, // Default: no color overrides
             debugLoggingEnabled: false, // Default: disabled (controls debug logging)
             showAllOpenTabsInCollapsedFolders: false, // Default: Arc behavior (only show active tab in collapsed folder)
@@ -90,6 +102,49 @@ const Utils = {
         const result = await chrome.storage.sync.get(defaultSettings);
         Logger.log("Retrieved settings:", result);
         return result;
+    },
+
+    getDefaultSidebarState: async function () {
+        const defaultName = 'Home';
+        return {
+            id: MAIN_SIDEBAR_ID,
+            uuid: this.generateUUID(),
+            name: defaultName,
+            color: await this.getTabGroupColor(defaultName),
+            pinnedItems: [],
+            pinnedTabIds: [],
+            temporaryTabs: [],
+            lastTab: null
+        };
+    },
+
+    getSidebarState: async function () {
+        const result = await chrome.storage.local.get([SIDEBAR_STATE_KEY]);
+        const defaultState = await this.getDefaultSidebarState();
+        const storedState = result[SIDEBAR_STATE_KEY] || defaultState;
+
+        return {
+            ...defaultState,
+            ...storedState,
+            id: MAIN_SIDEBAR_ID,
+            pinnedItems: normalizePinnedItems(storedState?.pinnedItems),
+            pinnedTabIds: Array.isArray(storedState?.pinnedTabIds) ? storedState.pinnedTabIds : [],
+            temporaryTabs: Array.isArray(storedState?.temporaryTabs) ? storedState.temporaryTabs : []
+        };
+    },
+
+    saveSidebarState: async function (sidebarState) {
+        const normalized = {
+            ...(await this.getDefaultSidebarState()),
+            ...sidebarState,
+            id: MAIN_SIDEBAR_ID,
+            pinnedItems: normalizePinnedItems(sidebarState?.pinnedItems),
+            pinnedTabIds: Array.isArray(sidebarState?.pinnedTabIds) ? sidebarState.pinnedTabIds : [],
+            temporaryTabs: Array.isArray(sidebarState?.temporaryTabs) ? sidebarState.temporaryTabs : []
+        };
+
+        await chrome.storage.local.set({ [SIDEBAR_STATE_KEY]: normalized });
+        return normalized;
     },
 
     // Get all overrides (keyed by tabId)
@@ -131,7 +186,7 @@ const Utils = {
         }
     },
 
-    // --- Pinned (Space Bookmark) Tab State ---
+    // --- Pinned Bookmark Tab State ---
     // Tracks the original "pinned/bookmark URL" for a pinned tab, even if the user navigates away.
     // Keyed by ephemeral tabId (per session) which is sufficient for Arc-like "Back to Pinned URL".
     getPinnedTabStates: async function () {
@@ -154,9 +209,96 @@ const Utils = {
         const states = await this.getPinnedTabStates();
         states[tabId] = {
             pinnedUrl: state.pinnedUrl || null,
-            bookmarkId: state.bookmarkId || null
+            bookmarkId: state.bookmarkId || null,
+            pinnedItemId: state.pinnedItemId || null
         };
         await this.savePinnedTabStates(states);
+    },
+
+    walkPinnedItems: function (items, visitor, parent = null) {
+        if (!Array.isArray(items)) return;
+        items.forEach((item, index) => {
+            visitor(item, { parent, index });
+            if (item?.type === PINNED_ITEM_TYPES.FOLDER) {
+                this.walkPinnedItems(item.children || [], visitor, item);
+            }
+        });
+    },
+
+    findPinnedItemById: function (items, itemId, parent = null) {
+        if (!Array.isArray(items) || !itemId) return null;
+
+        for (let index = 0; index < items.length; index += 1) {
+            const item = items[index];
+            if (item.id === itemId) {
+                return { item, parent, index, siblings: items };
+            }
+            if (item.type === PINNED_ITEM_TYPES.FOLDER) {
+                const found = this.findPinnedItemById(item.children || [], itemId, item);
+                if (found) return found;
+            }
+        }
+
+        return null;
+    },
+
+    findPinnedItemByUrl: function (items, url, parent = null) {
+        if (!Array.isArray(items) || !url) return null;
+
+        for (let index = 0; index < items.length; index += 1) {
+            const item = items[index];
+            if (item.type === PINNED_ITEM_TYPES.LINK && item.url === url) {
+                return { item, parent, index, siblings: items };
+            }
+            if (item.type === PINNED_ITEM_TYPES.FOLDER) {
+                const found = this.findPinnedItemByUrl(item.children || [], url, item);
+                if (found) return found;
+            }
+        }
+
+        return null;
+    },
+
+    removePinnedItemById: function (items, itemId) {
+        const found = this.findPinnedItemById(items, itemId);
+        if (!found?.siblings) return null;
+        const [removed] = found.siblings.splice(found.index, 1);
+        return removed || null;
+    },
+
+    removePinnedItemByUrl: function (items, url) {
+        const found = this.findPinnedItemByUrl(items, url);
+        if (!found?.siblings) return null;
+        const [removed] = found.siblings.splice(found.index, 1);
+        return removed || null;
+    },
+
+    createPinnedLinkItem: function ({ id, title, url, customTitle = false }) {
+        return {
+            id: id || this.generateUUID(),
+            type: PINNED_ITEM_TYPES.LINK,
+            title: title || 'Bookmark',
+            url: url || '',
+            customTitle: Boolean(customTitle),
+            placement: PINNED_ITEM_PLACEMENTS.SIDEBAR
+        };
+    },
+
+    createPinnedFolderItem: function ({ id, title, children = [] }) {
+        return {
+            id: id || this.generateUUID(),
+            type: PINNED_ITEM_TYPES.FOLDER,
+            title: title || 'Untitled',
+            children: normalizePinnedItems(children)
+        };
+    },
+
+    getPinnedItemTypeConstants: function () {
+        return { ...PINNED_ITEM_TYPES };
+    },
+
+    getPinnedItemPlacementConstants: function () {
+        return { ...PINNED_ITEM_PLACEMENTS };
     },
 
     removePinnedTabState: async function (tabId) {
@@ -169,61 +311,14 @@ const Utils = {
     },
 
     getTabGroupColor: async function (groupName) {
-        let tabGroups = await chrome.tabGroups.query({});
-
-        const chromeTabGroupColors = [
-            'grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan'
-        ];
-        const existingGroup = tabGroups.find(group => group.title === groupName);
-        if (existingGroup) {
-            return existingGroup.color;
-        } else {
-            const randomIndex = Math.floor(Math.random() * chromeTabGroupColors.length);
-            return chromeTabGroupColors[randomIndex];
+        const sidebarColors = ['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan'];
+        const input = String(groupName || 'Home');
+        let hash = 0;
+        for (let i = 0; i < input.length; i += 1) {
+            hash = ((hash << 5) - hash) + input.charCodeAt(i);
+            hash |= 0;
         }
-    },
-
-    updateBookmarkTitleIfNeeded: async function (tab, activeSpace, newTitle) {
-        Logger.log(`Attempting to update bookmark for pinned tab ${tab.id} in space ${activeSpace.name} to title: ${newTitle}`);
-
-        try {
-            const spaceFolder = await LocalStorage.getOrCreateSpaceFolder(activeSpace.name);
-            if (!spaceFolder) {
-                Logger.error(`Bookmark folder for space ${activeSpace.name} not found.`);
-                return;
-            }
-
-            // Recursive function to find and update the bookmark
-            const findAndUpdate = async (folderId) => {
-                const items = await chrome.bookmarks.getChildren(folderId);
-                for (const item of items) {
-                    if (item.url && item.url === tab.url) {
-                        // Found the bookmark
-                        // Avoid unnecessary updates if title is already correct
-                        if (item.title !== newTitle) {
-                            Logger.log(`Found bookmark ${item.id} for URL ${tab.url}. Updating title to "${newTitle}"`);
-                            await chrome.bookmarks.update(item.id, { title: newTitle });
-                        } else {
-                            Logger.log(`Bookmark ${item.id} title already matches "${newTitle}". Skipping update.`);
-                        }
-                        return true; // Found
-                    } else if (!item.url) {
-                        // It's a subfolder, search recursively
-                        const found = await findAndUpdate(item.id);
-                        if (found) return true; // Stop searching if found in subfolder
-                    }
-                }
-                return false; // Not found in this folder
-            };
-
-            const updated = await findAndUpdate(spaceFolder.id);
-            if (!updated) {
-                Logger.log(`Bookmark for URL ${tab.url} not found in space folder ${activeSpace.name}.`);
-            }
-
-        } catch (error) {
-            Logger.error(`Error updating bookmark for tab ${tab.id}:`, error);
-        }
+        return sidebarColors[Math.abs(hash) % sidebarColors.length];
     },
 
     // Function to get if archiving is enabled
@@ -244,12 +339,12 @@ const Utils = {
     },
 
     // Add a tab to the archive
-    addArchivedTab: async function (tabData) { // tabData = { url, name, spaceId, archivedAt }
-        if (!tabData || !tabData.url || !tabData.name || !tabData.spaceId) return;
+    addArchivedTab: async function (tabData) {
+        if (!tabData || !tabData.url || !tabData.name) return;
 
         const archivedTabs = await this.getArchivedTabs();
 
-        // Check if URL already exists in archive (regardless of space)
+        // Check if URL already exists in archive regardless of its original sidebar state
         const existingTab = archivedTabs.find(t => t.url === tabData.url);
         if (existingTab) {
             Logger.log(`Tab with URL already archived: ${tabData.name} (${tabData.url})`);
@@ -257,7 +352,11 @@ const Utils = {
         }
 
         // Add new tab with timestamp
-        const newArchiveEntry = { ...tabData, archivedAt: Date.now() };
+        const newArchiveEntry = {
+            url: tabData.url,
+            name: tabData.name,
+            archivedAt: Date.now()
+        };
         archivedTabs.push(newArchiveEntry);
 
         // Sort by timestamp (newest first for potential slicing, though FIFO means oldest removed)
@@ -269,19 +368,18 @@ const Utils = {
         }
 
         await this.saveArchivedTabs(archivedTabs);
-        Logger.log(`Archived tab: ${tabData.name} from space ${tabData.spaceId}`);
+        Logger.log(`Archived tab: ${tabData.name}`);
     },
 
     // Function to archive a tab (likely called from context menu)
     archiveTab: async function (tabId) {
         try {
             const tab = await chrome.tabs.get(tabId);
-            if (!tab || !activeSpaceId) return;
+            if (!tab) return;
 
             const tabData = {
                 url: tab.url,
-                name: tab.title,
-                spaceId: activeSpaceId // Archive within the current space
+                name: tab.title
             };
 
             await this.addArchivedTab(tabData);
@@ -294,39 +392,24 @@ const Utils = {
     },
 
     // Remove a tab from the archive (e.g., after restoration)
-    removeArchivedTab: async function (url, spaceId) {
-        if (!url || !spaceId) return;
+    removeArchivedTab: async function (url) {
+        if (!url) return;
 
         let archivedTabs = await this.getArchivedTabs();
-        archivedTabs = archivedTabs.filter(tab => !(tab.url === url && tab.spaceId === spaceId));
+        archivedTabs = archivedTabs.filter(tab => tab.url !== url);
         await this.saveArchivedTabs(archivedTabs);
-        Logger.log(`Removed archived tab: ${url} from space ${spaceId}`);
+        Logger.log(`Removed archived tab: ${url}`);
     },
 
     restoreArchivedTab: async function (archivedTabData) {
         try {
-            // Create the tab in the original space's group
             const newTab = await chrome.tabs.create({
                 url: archivedTabData.url,
-                active: true, // Make it active
-                // windowId: currentWindow.id // Ensure it's in the current window
+                active: true,
             });
 
-            // Immediately group the new tab into the correct space (if spaceId is valid)
-            if (archivedTabData.spaceId && archivedTabData.spaceId !== chrome.tabGroups.TAB_GROUP_ID_NONE) {
-                try {
-                    // Check if the group still exists
-                    await chrome.tabGroups.get(archivedTabData.spaceId);
-                    // Group exists, add tab to it
-                    await chrome.tabs.group({ tabIds: [newTab.id], groupId: archivedTabData.spaceId });
-                } catch (e) {
-                    // Group doesn't exist, create a new one or leave ungrouped
-                    Logger.warn(`Space ${archivedTabData.spaceId} no longer exists, tab restored without grouping`);
-                }
-            }
-
             // Remove from archive storage
-            await this.removeArchivedTab(archivedTabData.url, archivedTabData.spaceId);
+            await this.removeArchivedTab(archivedTabData.url);
 
             // Return the created tab so caller can pin it if needed
             return newTab;
@@ -347,110 +430,6 @@ const Utils = {
         const settings = await this.getSettings();
         settings.autoArchiveIdleMinutes = minutes;
         await chrome.storage.sync.set({ autoArchiveIdleMinutes: minutes });
-    },
-
-    // Get Arc-like positioning setting (when enabled, tabs append to end instead of syncing with Chrome)
-    getUseArcLikePositioning: async function () {
-        const settings = await this.getSettings();
-        return settings.useArcLikePositioning;
-    },
-
-    // Set Arc-like positioning setting
-    setUseArcLikePositioning: async function (enabled) {
-        await chrome.storage.sync.set({ useArcLikePositioning: enabled });
-    },
-
-    getInvertTabOrder: async function () {
-        const settings = await this.getSettings();
-        return settings.invertTabOrder;
-    },
-
-    setInvertTabOrder: async function (enabled) {
-        await chrome.storage.sync.set({ invertTabOrder: enabled });
-    },
-
-    // Search and remove bookmark by URL from a folder structure recursively
-    searchAndRemoveBookmark: async function (folderId, tabUrl, options = {}) {
-        const {
-            removeTabElement = false, // Whether to also remove the tab element from DOM
-            tabElement = null, // The tab element to remove if removeTabElement is true
-            logRemoval = false // Whether to log the removal
-        } = options;
-
-        const items = await chrome.bookmarks.getChildren(folderId);
-        for (const item of items) {
-            if (item.url === tabUrl) {
-                if (logRemoval) {
-                    Logger.log("removing bookmark", item);
-                }
-                await chrome.bookmarks.remove(item.id);
-
-                if (removeTabElement && tabElement) {
-                    tabElement.remove();
-                }
-
-                return true; // Bookmark found and removed
-            } else if (!item.url) {
-                // This is a folder, search recursively
-                const found = await this.searchAndRemoveBookmark(item.id, tabUrl, options);
-                if (found) return true;
-            }
-        }
-        return false; // Bookmark not found
-    },
-    // Navigate to adjacent tab within a space (next or previous)
-    _navigateTabInSpace: async function (tabId, sourceSpace, direction) {
-        const temporaryTabs = sourceSpace?.temporaryTabs ?? [];
-        const spaceBookmarks = sourceSpace?.spaceBookmarks ?? [];
-        const allTabs = [...spaceBookmarks, ...temporaryTabs];
-
-        if (allTabs.length === 0) return;
-
-        const currentIndex = allTabs.indexOf(tabId);
-        if (currentIndex === -1) return;
-
-        const nextIndex = direction === 'next'
-            ? (currentIndex + 1) % allTabs.length
-            : (currentIndex - 1 + allTabs.length) % allTabs.length;
-
-        chrome.tabs.update(allTabs[nextIndex], { active: true });
-    },
-
-    movToNextTabInSpace: async function (tabId, sourceSpace) {
-        return this._navigateTabInSpace(tabId, sourceSpace, 'next');
-    },
-
-    movToPrevTabInSpace: async function (tabId, sourceSpace) {
-        return this._navigateTabInSpace(tabId, sourceSpace, 'prev');
-    },
-    findActiveSpaceAndTab: async function () {
-        Logger.log("[TabNavigation] finding space");
-        const spacesResult = await chrome.storage.local.get('spaces');
-        const spaces = spacesResult.spaces || [];
-        Logger.log("[TabNavigation] Loaded spaces from storage:", spaces);
-        const foundTabs = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (foundTabs.length === 0) {
-            Logger.log("[TabNavigation] No active tab found!:");
-            return undefined;
-        }
-        const foundTab = foundTabs[0];
-        const spaceWithTempTab = spaces.find(space =>
-            space.temporaryTabs.includes(foundTab.id)
-        );
-        if (spaceWithTempTab) {
-            Logger.log(`[TabNavigation] Tab ${foundTab.id} is a temporary tab in space "${spaceWithTempTab.name}".`);
-            return { space: spaceWithTempTab, tab: foundTab };
-        }
-
-        const spaceWithBookmark = spaces.find(space =>
-            space.spaceBookmarks.includes(foundTab.id)
-        );
-        if (spaceWithBookmark) {
-            Logger.log(`[TabNavigation] Tab ${foundTab.id} is a bookmarked tab in space "${spaceWithBookmark.name}".`);
-            return { space: spaceWithBookmark, tab: foundTab };
-        }
-
-        return undefined
     },
 
     // Helper function to adjust menu position to keep it within viewport

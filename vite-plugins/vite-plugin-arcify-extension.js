@@ -14,7 +14,6 @@ function getExtensionInputs() {
     'installation-onboarding': resolve(process.cwd(), 'installation-onboarding.html'),
     // Note: newtab.html is handled separately in the build plugin
     background: resolve(process.cwd(), 'background.js'),
-    'sidebar-script': resolve(process.cwd(), 'sidebar.js'),
     'options-script': resolve(process.cwd(), 'options.js'),
     'onboarding-script': resolve(process.cwd(), 'onboarding.js'),
     'installation-onboarding-script': resolve(process.cwd(), 'installation-onboarding.js'),
@@ -27,9 +26,8 @@ function getExtensionInputs() {
 function getExtensionOutput(isDev = false) {
   return {
     entryFileNames: (chunkInfo) => {
-      const mainScripts = ['background', 'sidebar-script', 'options-script', 'onboarding-script', 'installation-onboarding-script'];
+      const mainScripts = ['background', 'options-script', 'onboarding-script', 'installation-onboarding-script'];
       if (mainScripts.includes(chunkInfo.name)) {
-        if (chunkInfo.name === 'sidebar-script') return 'sidebar.js';
         if (chunkInfo.name === 'options-script') return 'options.js';
         if (chunkInfo.name === 'onboarding-script') return 'onboarding.js';
         if (chunkInfo.name === 'installation-onboarding-script') return 'installation-onboarding.js';
@@ -250,12 +248,4 @@ export function createArcifyConfig(options = {}) {
   }
 
   return config;
-}
-
-/**
- * Legacy function for backward compatibility
- * @deprecated Use createArcifyConfig instead
- */
-export function arcifyExtensionPlugin(options = {}) {
-  return getExtensionPlugins(options.isDev);
 }

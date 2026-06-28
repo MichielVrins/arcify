@@ -4,7 +4,156 @@
     box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+    height: 100%;
+}
+
+.sidebar-loading,
+.sidebar-error {
+    padding: 20px;
+}
+
+.react-favorite-slot {
+    flex: 1 1 calc(25% - 8px);
+    min-width: 0;
+    position: relative;
+}
+
+.react-tab-row {
+    max-height: 80px;
+    overflow: hidden;
+    transition:
+        max-height 140ms ease,
+        opacity 110ms ease,
+        transform 140ms ease;
+}
+
+.react-tab-row.closing {
+    max-height: 0;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-5px);
+}
+
+.react-favorite-drag {
+    border-radius: 12px;
+    width: 100%;
+    transform: skewX(0);
+}
+
+.favorite-title-input,
+.folder-title-input {
+    background: rgba(255, 255, 255, 0.55);
+    border: 1px solid rgba(0, 0, 0, 0.25);
+    border-radius: 6px;
+    color: inherit;
+    font: inherit;
+    min-width: 0;
+    outline: none;
+    padding: 4px 6px;
+    width: 100%;
+}
+
+.favorite-title-input {
+    height: 48px;
+    text-align: center;
+}
+
+.folder-title-input {
+    flex: 1;
+}
+
+.folder-draft {
+    margin-bottom: 4px;
+    margin-top: 4px;
+}
+
+.folder-header.folder-drop-active {
+    background: rgba(255, 255, 255, 0.28);
+}
+
+.drag-overlay-preview {
+    align-items: center;
+    background: #eceff1;
+    border-radius: 10px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
+    display: flex;
+    gap: 10px;
+    max-width: 280px;
+    min-width: 160px;
+    opacity: 0.92;
+    overflow: hidden;
+    padding: 10px 12px;
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+.drag-overlay-preview span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.react-drop-zone {
+    height: 6px;
+    margin: -3px 8px;
+    pointer-events: none;
+    position: relative;
+    z-index: 5;
+}
+
+.react-drop-zone.active::after {
+    background: currentColor;
+    border-radius: 2px;
+    content: "";
+    height: 2px;
+    left: 0;
+    position: absolute;
+    right: 0;
+    top: 2px;
+}
+
+.react-drop-zone-horizontal {
+    align-self: stretch;
+    min-width: 6px;
+    pointer-events: none;
+    position: relative;
+}
+
+.react-drop-zone-horizontal.active::after {
+    background: currentColor;
+    border-radius: 2px;
+    bottom: 4px;
+    content: "";
+    position: absolute;
+    top: 4px;
+    width: 2px;
+}
+
+.context-menu-backdrop {
+    inset: 0;
+    position: fixed;
+    z-index: 999;
+}
+
+.context-menu.react-context-menu {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    z-index: 9999;
+}
+
+.react-context-menu .context-menu-item {
+    border: 0;
+    text-align: left;
+    width: 100%;
+}
+
 :root {
+    --sidebar-surface: #fff8f6;
+    --sidebar-surface-hover: #f1e7e4;
+
     /* User color overrides (set via JavaScript, fallback to defaults) */
     --chrome-grey-color: var(--user-chrome-grey-color, #cccccc);
     --chrome-blue-color: var(--user-chrome-blue-color, #8bb3f3);
@@ -80,7 +229,7 @@ h3 {
 }
 
 .sidebar-container {
-    background-color: var(--space-bg-color, rgba(255, 255, 255, 0.1));
+    background-color: var(--collection-bg-color, rgba(255, 255, 255, 0.1));
     padding: 16px 8px;
     display: flex;
     flex-direction: column;
@@ -102,27 +251,40 @@ h3 {
 }
 
 .pinned-favicon {
-    width: 32px;
+    width: 100%;
     height: 48px;
-    flex: 1 1 24%;
+    border: 1px solid rgba(45, 32, 28, 0.08);
+    padding: 0;
     border-radius: 8px;
+    transform: skewX(0deg);
     cursor: pointer;
-    transition: all 0.2s;
+    transition:
+        background-color 0.18s ease,
+        border-color 0.18s ease,
+        box-shadow 0.18s ease,
+        transform 0.18s ease;
     display: flex;
     align-items: center;
     justify-content: center;
-    background-color: rgba(255, 255, 255, 0.2);
+    background-color: rgba(255, 255, 255, 0.72);
+    box-shadow:
+        0 1px 2px rgba(45, 32, 28, 0.06),
+        0 5px 14px rgba(45, 32, 28, 0.07);
 }
 
 .pinned-favicon.active,
 .pinned-favicon.active:hover {
-    background-color: #ECEFF1;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    background-color: #eceff1;
+    border-color: rgba(45, 32, 28, 0.12);
+    box-shadow:
+        0 1px 2px rgba(45, 32, 28, 0.08),
+        0 7px 18px rgba(45, 32, 28, 0.12);
 }
 
 .pinned-favicon:hover {
-    /* transform: scale(1.1); */
-    background-color: rgba(0, 0, 0, 0.1);
+    background-color: rgba(255, 255, 255, 0.92);
+    border-color: rgba(45, 32, 28, 0.14);
+    transform: translateY(-1px);
 }
 
 .pinned-favicon img {
@@ -190,20 +352,16 @@ h3 {
     display: block;
 }
 
-.spaces-list {
+.collections-list {
     flex-grow: 1;
     display: flex;
     flex-direction: column;
     gap: 16px;
-    overflow-y: scroll;
-    scrollbar-width: none;
+    min-height: 0;
+    overflow: hidden;
 }
 
-.spaces-list::-webkit-scrollbar {
-    display: none;
-}
-
-.space {
+.collection {
     /* background-color: rgba(255, 255, 255, 0.1);
     border-radius: 12px;
     padding: 16px; */
@@ -211,100 +369,16 @@ h3 {
     flex-direction: column;
     overflow-y: hidden;
     height: 100%;
+    min-height: 0;
 }
 
-.space-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-
-.space-name-container {
-    display: flex;
-    align-items: center;
-    flex-grow: 1;
-    position: relative;
-    border-radius: 4px;
-    transition: background-color 0.3s ease;
-    margin-left: 8px;
-}
-
-.space-toggle-chevron {
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 4px;
-    margin-right: 8px;
-    border-radius: 4px;
-    opacity: 0;
-    transition: opacity 0.2s ease, transform 0.2s ease;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    pointer-events: none;
-    width: 0;
-    margin-left: 0;
-    margin-right: 0;
-    padding-left: 0;
-    padding-right: 0;
-    overflow: hidden;
-}
-
-.space-name-container:hover .space-toggle-chevron {
-    opacity: 0.7 !important;
-    pointer-events: auto;
-    width: auto;
-    margin-right: 8px;
-    margin-left: 0px;
-    padding-left: 4px;
-    padding-right: 4px;
-}
-
-.space-name-container:hover .space-name {
-    margin-left: 2px;
-}
-
-.space-toggle-chevron:hover {
-    opacity: 1 !important;
-    background-color: rgba(0, 0, 0, 0.1);
-}
-
-.chevron-icon {
-    width: 16px;
-    height: 16px;
-    fill: currentColor;
-    transition: transform 0.2s ease;
-}
-
-.space-toggle-chevron.collapsed .chevron-icon {
-    transform: rotate(-90deg);
-}
-
-.space-name {
-    flex-grow: 1;
-    background: none;
-    border: none;
-    font-size: 16px;
-    font-weight: 600;
-    color: #333;
-    padding: 4px 0;
-    border-radius: 4px;
-    opacity: 0.95;
-    transition: margin-left 0.2s ease;
-}
-
-.space-name:focus {
-    background-color: rgba(255, 255, 255, 0.2);
-    outline: none;
-}
-
-.space-options-container {
+.collection-options-container {
     position: relative;
     display: flex;
     align-items: center;
 }
 
-.space-options {
+.collection-options {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -317,11 +391,11 @@ h3 {
     border-radius: 8px;
 }
 
-.space-options:hover {
+.collection-options:hover {
     background-color: rgba(0, 0, 0, 0.1);
 }
 
-.space-options-dropdown {
+.collection-options-dropdown {
     position: absolute;
     top: 100%;
     right: 0;
@@ -334,11 +408,11 @@ h3 {
     z-index: 1000;
 }
 
-.space-options-container:hover .space-options-dropdown {
+.collection-options-container:hover .collection-options-dropdown {
     display: flex;
 }
 
-.space-options-dropdown button {
+.collection-options-dropdown button {
     background: none;
     border: none;
     padding: 8px 16px;
@@ -348,7 +422,7 @@ h3 {
     font-size: 14px;
 }
 
-.space-options-dropdown button:hover {
+.collection-options-dropdown button:hover {
     background-color: rgba(0, 0, 0, 0.05);
 }
 
@@ -358,11 +432,11 @@ h3 {
     margin: 4px 8px;
 }
 
-.space-color-select {
+.collection-color-select {
     display: none;
 }
 
-.space-color-select option {
+.collection-color-select option {
     appearance: none;
     -webkit-appearance: none;
 }
@@ -434,13 +508,13 @@ h3 {
 }
 
 .folder {
-    margin: 8px 0;
+    margin: 0;
     /* background-color: rgba(255, 255, 255, 0.1); */
     border-radius: 8px;
     overflow: hidden;
     /* border: 1px solid rgba(0, 0, 0, 0.1); */
     /* background-color: rgba(255, 255, 255, 0.2); */
-    background: var(--space-bg-color, rgba(255, 255, 255, 0.1));
+    background: var(--collection-bg-color, rgba(255, 255, 255, 0.1));
     transition: all 0.2s;
     position: relative;
     z-index: 1;
@@ -448,7 +522,7 @@ h3 {
 
 .folder.collapsed {
     /* background-color: rgba(1, 1, 1, 0); */
-    background: var(--space-bg-color, rgba(255, 255, 255, 0.1));
+    background: var(--collection-bg-color, rgba(255, 255, 255, 0.1));
 }
 
 .folder.collapsed div.tab-placeholder {
@@ -460,9 +534,9 @@ h3 {
     margin-right: 16px;
 }
 
-.folder.collapsed:hover {
-    /* background-color: rgba(255, 255, 255, 0.2); */
-    background: var(--space-bg-color-dark, rgba(255, 255, 255, 0.1));
+.folder.collapsed > div > .folder-header:hover {
+    background: var(--collection-bg-color-dark, rgba(255, 255, 255, 0.1));
+    border-radius: 8px;
 }
 
 .folder-title {
@@ -589,21 +663,53 @@ h3 {
     display: none;
 }
 
-.space-content {
+.collection-content {
     display: flex;
     flex-direction: column;
     transition: all 0.2s ease;
     opacity: 1;
     z-index: 1;
-    overflow-y: scroll;
-    scrollbar-width: none;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(70, 70, 70, 0.58) transparent;
     flex-grow: 1;
 }
 
-.space-content.hidden {
+.collection-content::-webkit-scrollbar {
+    width: 8px;
+}
+
+.collection-content::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.collection-content::-webkit-scrollbar-thumb {
+    background: rgba(70, 70, 70, 0.58);
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+}
+
+.collection-content:hover::-webkit-scrollbar-thumb {
+    background: rgba(70, 70, 70, 0.72);
+    background-clip: padding-box;
+}
+
+.collection-content.hidden {
     opacity: 0;
     z-index: 0;
     height: 0;
+}
+
+.sidebar-footer {
+    position: relative;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    margin-top: 12px;
+    min-height: 32px;
 }
 
 .pinned-tabs,
@@ -660,38 +766,11 @@ h3 {
 .tabs-container {
     min-height: 60px;
     margin-top: 4px;
-    background: var(--space-bg-color);
+    background: var(--collection-bg-color);
     /* border-radius: 8px;
     background-color: rgba(255, 255, 255, 0.1);
     padding: 8px;
      */
-}
-
-.create-space-container {
-    width: 100%;
-    display: flex;
-    gap: 8px;
-}
-
-.add-space-btn {
-    background: none;
-    border: none;
-    color: #666;
-    padding: 8px;
-    border-radius: 8px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 14px;
-}
-
-.add-space-btn:hover {
-    background-color: rgba(0, 0, 0, 0.1);
-}
-
-.add-space-btn span {
-    font-size: 18px;
 }
 
 .new-tab-btn {
@@ -764,77 +843,31 @@ h3 {
     }
 }
 
-.space-switcher {
-    display: flex;
-    gap: 8px;
-    justify-content: flex-start;
-    margin-left: -8px;
-    padding: 8px 48px 4px 8px;
-    overflow-x: auto;
-    scrollbar-width: none;
-    /* Firefox */
-    -ms-overflow-style: none;
-    /* IE and Edge */
-    opacity: 1;
-    visibility: visible;
-    transition: opacity 0.2s ease, visibility 0.2s ease;
-    mask-image: linear-gradient(to right, rgb(0, 0, 0), rgb(0, 0, 0), rgb(0, 0, 0), rgb(0, 0, 0), rgba(0, 0, 0, 0));
-}
-
-.space-switcher::-webkit-scrollbar {
-    display: none;
-    /* Chrome, Safari and Opera */
-}
-
-.space-switcher button {
-    min-width: 32px;
-    max-width: none;
-    width: auto;
-    height: 32px;
-    border-radius: 16px;
-    border: none;
-    background-color: rgba(255, 255, 255, 0.2);
-    cursor: pointer;
-    transition: all 0.2s;
-    padding: 0 12px;
-    color: #333;
-    font-size: 14px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    flex: none;
-    transition: background-color 0.3s ease;
-}
-
-.space-switcher button:hover {
-    background-color: rgba(255, 255, 255, 0.3);
-}
-
-.space-switcher button.active {
-    background-color: #ECEFF1;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
 .tab {
+    margin-bottom: 0;
+    padding: 1px 0;
+    cursor: pointer;
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+    transform: skewX(0deg);
+}
+
+.tab-surface {
     display: flex;
     align-items: center;
     padding: 4px 12px;
-    margin-bottom: 4px;
     border-radius: 12px;
-    cursor: pointer;
     transition: background-color 0.3s ease;
-    background: var(--space-bg-color, rgba(255, 255, 255, 0.1));
+    background: var(--collection-bg-color, rgba(255, 255, 255, 0.1));
     position: relative;
-    /* font-weight: 600; */
 }
 
-.tab:hover {
-    background: var(--space-bg-color-dark, rgba(255, 255, 255, 0.1));
-    /* make background darker */
-    /* background-color: #bdbdbd; */
+.tab:hover .tab-surface {
+    background: var(--collection-bg-color-dark, rgba(255, 255, 255, 0.1));
 }
 
-.tab.active {
+.tab.active .tab-surface {
     background-color: #ECEFF1;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
@@ -1020,92 +1053,6 @@ h3 {
     color: inherit;
     font-size: inherit;
     padding: 4px;
-}
-
-.space-switcher-container {
-    position: relative;
-    margin-top: 8px;
-}
-
-.add-space-toggle {
-    position: absolute;
-    right: 0;
-    top: 8px;
-    width: 32px;
-    height: 32px;
-    border-radius: 16px;
-    border: none;
-    background-color: rgba(255, 255, 255, 0.8);
-    color: #333;
-    font-size: 18px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s ease;
-}
-
-.add-space-toggle.active {
-    transform: rotate(45deg);
-}
-
-.add-space-toggle:hover {
-    background-color: rgba(255, 255, 255, 1);
-}
-
-.add-space-input-container {
-    flex-direction: column;
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    opacity: 0;
-    height: 0px;
-    transition: all 0.2s ease;
-}
-
-.add-space-input-container.visible {
-    opacity: 1;
-    height: 5rem;
-}
-
-#newSpaceName {
-    flex: 1;
-    background-color: rgba(255, 255, 255, 0.6);
-    border: none;
-    border-radius: 8px;
-    padding: 8px 12px;
-    font-size: 14px;
-    color: #333;
-    outline: none;
-    transition: background-color 0.3s ease;
-}
-
-#newSpaceName:focus {
-    background-color: rgba(255, 255, 255, 1);
-}
-
-#newSpaceName::placeholder {
-    color: rgba(51, 51, 51, 0.6);
-}
-
-#createSpaceBtn {
-    background-color: rgba(255, 255, 255, 0.8);
-    border: none;
-    border-radius: 8px;
-    padding: 8px 12px;
-    font-size: 14px;
-    color: #333;
-    cursor: pointer;
-    transition: background-color 0.3s ease;
-}
-
-#createSpaceBtn:hover:not(:disabled) {
-    background-color: rgba(255, 255, 255, 1);
-}
-
-#createSpaceBtn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
 }
 
 .new-tab-btn span {
@@ -1340,60 +1287,39 @@ h3 {
 }
 
 
-/* Archive Section Styles */
-.archive-section {
-    width: 100%;
-    margin-top: auto;
-    /* Push to the bottom */
-    display: flex;
-    justify-content: flex-start;
-    /* Align button to the left */
-    transition: all 0.2s ease;
-    overflow: hidden;
+.footer-options-container {
+    margin-left: auto;
 }
 
-.sidebar-button {
-    /* General style for buttons like archive */
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: none;
-    border: none;
-    font-size: 20px;
-    /* Adjust icon size */
-    padding: 4px 2px;
-    cursor: pointer;
-    border-radius: 8px;
-    color: #101010bd;
-    /* Adjust icon color */
-    transition: background-color 0.3s ease;
-}
-
-.sidebar-button:hover {
-    background-color: rgba(0, 0, 0, 0.1);
+.footer-options-container .collection-options-dropdown {
+    top: auto;
+    right: 0;
+    bottom: 100%;
 }
 
 .archived-tabs-popup {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 12px);
     display: flex;
-    /* Hidden by default */
     flex-direction: column;
-    height: 0;
     opacity: 0;
-    margin-top: 0;
-    width: 100%;
+    width: min(280px, calc(100vw - 32px));
+    max-height: 280px;
     overflow-y: auto;
     z-index: 0;
-    /* Ensure it's above other elements */
     transition: opacity 0.3s ease;
-    /* padding: 8px; */
-    /* font-size: 13px; */
+    pointer-events: none;
+    padding: 12px;
+    border-radius: 12px;
+    background: #ECEFF1;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
 }
 
 .archived-tabs-popup.visible {
     opacity: 1;
     z-index: 2;
-    height: 100%;
-    margin-top: 12px;
+    pointer-events: auto;
 }
 
 .archived-tabs-list {
@@ -1667,13 +1593,6 @@ h3 {
     left: 0;
 }
 
-#spaceSwitcher button {
-    /* Add transition for smooth movement */
-    transition: all 0.2s ease-in-out, margin-left 0.2s ease-in-out, margin-right 0.2s ease-in-out;
-    /* Ensure buttons don't wrap unexpectedly if you add margins */
-    white-space: nowrap;
-}
-
 /* Class to add margin *before* an element */
 .drag-over-placeholder-before {
     margin-left: 50px;
@@ -1695,6 +1614,12 @@ h3 {
 /* Drop indicator lines for drag and drop visual feedback */
 .drop-indicator-horizontal {
     position: relative;
+}
+
+.folder.drop-target-inside > .folder-header {
+    background: color-mix(in srgb, var(--chrome-blue-color) 18%, transparent);
+    box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--chrome-blue-color) 70%, transparent);
+    border-radius: 10px;
 }
 
 .drop-indicator-horizontal::before {
@@ -1735,6 +1660,37 @@ h3 {
 
 .drop-indicator-horizontal.below::after {
     bottom: -6px;
+}
+
+/* Folders clip overflow, so render root-level above/below indicators inside their edge. */
+.tabs-container[data-tab-type="pinned"] > .tab.drop-indicator-horizontal.above::before,
+.folder.drop-indicator-horizontal.above::before {
+    top: 0;
+    left: 8px;
+    right: 8px;
+    height: 2px;
+    background-color: var(--chrome-blue-color);
+    opacity: 0.95;
+}
+
+.tabs-container[data-tab-type="pinned"] > .tab.drop-indicator-horizontal.above::after,
+.folder.drop-indicator-horizontal.above::after {
+    display: none;
+}
+
+.tabs-container[data-tab-type="pinned"] > .tab.drop-indicator-horizontal.below::before,
+.folder.drop-indicator-horizontal.below::before {
+    bottom: 0;
+    left: 8px;
+    right: 8px;
+    height: 2px;
+    background-color: var(--chrome-blue-color);
+    opacity: 0.95;
+}
+
+.tabs-container[data-tab-type="pinned"] > .tab.drop-indicator-horizontal.below::after,
+.folder.drop-indicator-horizontal.below::after {
+    display: none;
 }
 
 .drop-indicator-vertical {
@@ -1850,7 +1806,7 @@ h3 {
 }
 
 .pinned-placeholder-container {
-    padding: 8px 16px;
+    padding: 4px 16px 8px;
     text-align: center;
     width: 100%;
     transition: background-color 0.2s ease;
@@ -1869,55 +1825,17 @@ h3 {
 }
 
 .pinned-tab-placeholder {
-    color: rgba(0, 0, 0, 0.5);
-    padding: 20px;
+    min-height: 24px;
     border: 2px dashed rgba(0, 0, 0, 0.1);
-    border-radius: 8px;
-    background: var(--sidebar-secondary-bg, rgba(0, 0, 0, 0.02));
-    text-align: center;
-    position: relative;
-}
-
-.placeholder-close-btn {
-    position: absolute;
-    top: 4px;
-    right: 4px;
-    background: none;
-    border: none;
-    color: rgba(0, 0, 0, 0.5);
-    font-size: 20px;
-    cursor: pointer;
-    padding: 4px;
-    line-height: 1;
-    border-radius: 50%;
-    width: 24px;
-    height: 24px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.placeholder-close-btn:hover {
-    color: var(--sidebar-text-color, #333);
-    background-color: var(--tab-hover-bg, rgba(0, 0, 0, 0.05));
-}
-
-.placeholder-title {
-    font-weight: 600;
-    font-size: 14px;
-    margin-bottom: 4px;
-}
-
-.placeholder-subtitle {
-    font-size: 12px;
-    max-width: 200px;
-    margin: 0 auto;
-    line-height: 1.4;
+    border-radius: 999px;
+    background: transparent;
 }
 
 /* Dark mode support */
 @media (prefers-color-scheme: dark) {
     :root {
+        --sidebar-surface: #202124;
+        --sidebar-surface-hover: #303134;
         /* In dark mode, use darker variants of user colors or fallback to dark defaults */
         --chrome-grey-color: var(--user-chrome-grey-color, #546E7A);
         --chrome-blue-color: var(--user-chrome-blue-color, #235d8b);
@@ -1948,23 +1866,11 @@ h3 {
         color: #ECEFF1;
     }
 
-    .space-name {
+    .collection-options {
         color: #ECEFF1;
     }
 
-    .space-toggle-chevron {
-        color: #ECEFF1;
-    }
-
-    .space-toggle-chevron:hover {
-        background-color: rgba(255, 255, 255, 0.1);
-    }
-
-    .space-options {
-        color: #ECEFF1;
-    }
-
-    .space-options-dropdown button:hover {
+    .collection-options-dropdown button:hover {
         background-color: rgba(255, 255, 255, 0.1);
     }
 
@@ -1993,24 +1899,8 @@ h3 {
         background-color: rgba(255, 255, 255, 0.2);
     }
 
-    .add-space-btn {
-        color: rgba(255, 255, 255, 0.7);
-    }
-
-    .add-space-btn:hover {
-        background-color: rgba(255, 255, 255, 0.1);
-    }
-
     .new-tab-btn {
         color: #ECEFF1;
-    }
-
-    .space-switcher button {
-        color: #ECEFF1;
-    }
-
-    .space-switcher button.active {
-        color: #000000;
     }
 
     .tab-title-display,
@@ -2028,34 +1918,9 @@ h3 {
         color: rgba(255, 255, 255, 0.8);
     }
 
-    #newSpaceName {
-        background-color: rgba(255, 255, 255, 0.1);
-        color: #ECEFF1;
-    }
-
-    #newSpaceName:focus {
-        background-color: rgba(255, 255, 255, 0.2);
-    }
-
-    #newSpaceName::placeholder {
-        color: rgba(255, 255, 255, 0.5);
-    }
-
-    #createSpaceBtn {
-        background-color: rgba(255, 255, 255, 0.2);
-        color: #ECEFF1;
-    }
-
-    #createSpaceBtn:hover:not(:disabled) {
-        background-color: rgba(255, 255, 255, 0.3);
-    }
-
-    .sidebar-button {
-        color: rgba(255, 255, 255, 0.8);
-    }
-
-    .sidebar-button:hover {
-        background-color: rgba(255, 255, 255, 0.1);
+    .archived-tabs-popup {
+        background: #263238;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
     }
 
     .archived-tabs-list .archived-tab-item {
@@ -2087,18 +1952,9 @@ h3 {
     }
 
     .pinned-tab-placeholder {
-        color: rgba(255, 255, 255, 0.5);
+        min-height: 20px;
         border: 2px dashed rgba(255, 255, 255, 0.2);
-        background: rgba(255, 255, 255, 0.05);
-    }
-
-    .placeholder-close-btn {
-        color: rgba(255, 255, 255, 0.5);
-    }
-
-    .placeholder-close-btn:hover {
-        color: #ECEFF1;
-        background-color: rgba(255, 255, 255, 0.1);
+        background: transparent;
     }
 
     /* Spotlight dialog dark mode */
@@ -2137,16 +1993,24 @@ h3 {
         color: rgba(255, 255, 255, 0.6);
     }
 
+    .pinned-favicon {
+        background-color: rgba(255, 255, 255, 0.08);
+        border-color: rgba(255, 255, 255, 0.1);
+        box-shadow: 0 5px 14px rgba(0, 0, 0, 0.2);
+    }
+
+    .pinned-favicon:hover {
+        background-color: rgba(255, 255, 255, 0.14);
+        border-color: rgba(255, 255, 255, 0.18);
+    }
+
+    .pinned-favicon.active,
+    .pinned-favicon.active:hover {
+        background-color: #eceff1;
+        border-color: rgba(255, 255, 255, 0.16);
+    }
+
     .color-swatch.selected {
         border-color: rgba(255, 255, 255, 0.5);
     }
-}
-
-.space-header-spacer {
-    flex: 1;
-}
-
-.space-actions {
-    display: flex;
-    align-items: center;
 }

@@ -11,7 +11,6 @@ class InstallationOnboarding {
         };
         this.shortcuts = {
             '_execute_action': 'Alt+S',
-            'quickPinToggle': 'Alt+D',
             'toggleSpotlight': 'Alt+L',
             'toggleSpotlightNewTab': 'Alt+T'
         };
@@ -72,9 +71,6 @@ class InstallationOnboarding {
             }
             if (this.shortcuts['toggleSpotlight']) {
                 urlParams.set('spotlight-search', this.shortcuts['toggleSpotlight']);
-            }
-            if (this.shortcuts['quickPinToggle']) {
-                urlParams.set('switch-spaces', this.shortcuts['quickPinToggle']);
             }
             if (this.shortcuts['toggleSpotlightNewTab']) {
                 urlParams.set('new-tab', this.shortcuts['toggleSpotlightNewTab']);
@@ -223,7 +219,6 @@ class InstallationOnboarding {
             // Store shortcuts in instance for URL parameter passing
             this.shortcuts = {
                 '_execute_action': shortcuts['_execute_action'] || 'Alt+S',
-                'quickPinToggle': shortcuts['quickPinToggle'] || 'Alt+D',
                 'toggleSpotlight': shortcuts['toggleSpotlight'] || 'Alt+L',
                 'toggleSpotlightNewTab': shortcuts['toggleSpotlightNewTab'] || 'Alt+T'
             };
@@ -235,7 +230,6 @@ class InstallationOnboarding {
             // Fallback to default shortcuts
             this.shortcuts = {
                 '_execute_action': 'Alt+S',
-                'quickPinToggle': 'Alt+D',
                 'toggleSpotlight': 'Alt+L',
                 'toggleSpotlightNewTab': 'Alt+T'
             };
@@ -248,7 +242,6 @@ class InstallationOnboarding {
         const shortcutElements = {
             'toggle-sidepanel': shortcuts['_execute_action'] || 'Alt+S',
             'spotlight-search': shortcuts['toggleSpotlight'] || 'Alt+L',
-            'switch-spaces': shortcuts['quickPinToggle'] || 'Alt+D', // Using quickPinToggle for space switching
             'new-tab': shortcuts['toggleSpotlightNewTab'] || 'Alt+T' // New Tab spotlight
         };
 

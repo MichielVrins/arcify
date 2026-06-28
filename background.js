@@ -26,8 +26,98 @@ const SpotlightTabMode = {
 // Create a single SearchEngine instance with BackgroundDataProvider
 const backgroundSearchEngine = new SearchEngine(new BackgroundDataProvider());
 
+function invalidateSpotlightSearchCache() {
+    backgroundSearchEngine.cache.clear();
+}
+
 const AUTO_ARCHIVE_ALARM_NAME = 'autoArchiveTabsAlarm';
 const TAB_ACTIVITY_STORAGE_KEY = 'tabLastActivity'; // Key to store timestamps
+const TAB_SWITCHER_SESSION_TIMEOUT_MS = 1400;
+const TAB_SWITCHER_HISTORY_LIMIT = 7;
+let tabSwitcherSession = null;
+const tabPreviewCache = new Map();
+const pendingTabSwitcherHideTimers = new Map();
+
+function getOrigin(url) {
+    if (!url) return null;
+    try {
+        return new URL(url).origin;
+    } catch {
+        return null;
+    }
+}
+
+async function getPinnedNavigationGuardStateForTab(tabId) {
+    if (!tabId) {
+        return { enabled: false, pinnedUrl: null, pinnedOrigin: null };
+    }
+
+    const pinnedState = await Utils.getPinnedTabState(tabId);
+    const pinnedUrl = pinnedState?.pinnedUrl || null;
+    const pinnedOrigin = getOrigin(pinnedUrl);
+
+    return {
+        enabled: Boolean(pinnedUrl && pinnedOrigin),
+        pinnedUrl,
+        pinnedOrigin
+    };
+}
+
+async function sendPinnedNavigationGuardState(tabId) {
+    if (!tabId) return;
+
+    let tab = null;
+    try {
+        tab = await chrome.tabs.get(tabId);
+    } catch {
+        return;
+    }
+
+    if (!supportsContentScripts(tab?.url)) {
+        return;
+    }
+
+    const message = {
+        action: 'updatePinnedNavigationGuard',
+        ...(await getPinnedNavigationGuardStateForTab(tabId))
+    };
+
+    try {
+        const response = await chrome.tabs.sendMessage(tabId, message);
+        if (response?.success) {
+            return;
+        }
+    } catch {
+        // Existing pages lose their content-script context when the extension reloads.
+    }
+
+    try {
+        await chrome.scripting.executeScript({
+            target: { tabId },
+            files: ['spotlight/overlay.js']
+        });
+        await chrome.tabs.sendMessage(tabId, message);
+    } catch {
+        // The page may reject content-script injection.
+    }
+}
+
+async function openPinnedNavigationLink({ sourceTabId, url }) {
+    if (!sourceTabId || !url) {
+        throw new Error('Missing sourceTabId or url');
+    }
+
+    const sourceTab = await chrome.tabs.get(sourceTabId);
+    const createdTab = await chrome.tabs.create({
+        windowId: sourceTab.windowId,
+        index: typeof sourceTab.index === 'number' ? sourceTab.index + 1 : undefined,
+        openerTabId: sourceTabId,
+        url,
+        active: true
+    });
+
+    return { tabId: createdTab.id };
+}
 
 // Helper to handle async message responses with consistent error handling
 function handleAsyncMessage(handler, sendResponse, errorContext, defaultErrorData = {}) {
@@ -56,8 +146,6 @@ chrome.runtime.onInstalled.addListener(async (details) => {
         if (!result.onboardingCompleted) {
             chrome.tabs.create({ url: 'installation-onboarding.html', active: true });
         }
-    } else if (details.reason === 'update') {
-        chrome.tabs.create({ url: 'installation-onboarding.html', active: true });
     }
 
     if (chrome.contextMenus) {
@@ -78,46 +166,277 @@ if (chrome.contextMenus) {
     });
 }
 
-// Listen for messages from the content script (sidebar)
-chrome.runtime.onMessage.addListener(async function (request, sender, sendResponse) {
-    // Forward the pin toggle command to the sidebar
-    if (request.command === "toggleSpacePin") {
-        chrome.runtime.sendMessage({ command: "toggleSpacePin", tabId: request.tabId });
-    } else if (request.command === "toggleSpotlight") {
-        await injectSpotlightScript(SpotlightTabMode.CURRENT_TAB);
-    } else if (request.command === "toggleSpotlightNewTab") {
-        await injectSpotlightScript(SpotlightTabMode.NEW_TAB);
-    }
-});
-
 chrome.commands.onCommand.addListener(async function (command) {
-    if (command === "quickPinToggle") {
-        // Send a message to the sidebar
-        chrome.runtime.sendMessage({ command: "quickPinToggle" });
-    } else if (command === "NextTabInSpace") {
-        Utils.findActiveSpaceAndTab().then(async ({ space, tab }) => {
-            if (space) {
-                await Utils.movToNextTabInSpace(tab.id, space);
-            }
-        });
-    }
-    else if (command === "PrevTabInSpace") {
-        Utils.findActiveSpaceAndTab().then(async ({ space, tab }) => {
-            if (space) {
-                await Utils.movToPrevTabInSpace(tab.id, space);
-            }
-        });
-        Logger.log("sending");
-        // Send a message to the sidebar
-        chrome.runtime.sendMessage({ command: "PrevTabInSpace" });
-    } else if (command === "toggleSpotlight") {
-        await injectSpotlightScript(SpotlightTabMode.CURRENT_TAB);
+    if (command === "recentTabSwitcher") {
+        await switchRecentTab();
     } else if (command === "toggleSpotlightNewTab") {
         await injectSpotlightScript(SpotlightTabMode.NEW_TAB);
     } else if (command === "copyCurrentUrl") {
         await copyCurrentTabUrlWithFallback();
+    } else if (command === "reloadExtension") {
+        chrome.runtime.reload();
     }
 });
+
+function resetTabSwitcherSession() {
+    if (tabSwitcherSession?.timeoutId) {
+        clearTimeout(tabSwitcherSession.timeoutId);
+    }
+    tabSwitcherSession = null;
+}
+
+function scheduleTabSwitcherSessionReset() {
+    if (!tabSwitcherSession) {
+        return;
+    }
+
+    if (tabSwitcherSession.timeoutId) {
+        clearTimeout(tabSwitcherSession.timeoutId);
+    }
+
+    tabSwitcherSession.timeoutId = setTimeout(() => {
+        tabSwitcherSession = null;
+    }, TAB_SWITCHER_SESSION_TIMEOUT_MS);
+}
+
+async function getRecentTabsForWindow(windowId, activeTabId) {
+    const tabs = await chrome.tabs.query({ windowId });
+    const storage = await chrome.storage.local.get([TAB_ACTIVITY_STORAGE_KEY]);
+    const activityData = storage[TAB_ACTIVITY_STORAGE_KEY] || {};
+
+    return tabs
+        .filter(tab => tab.id && tab.url && tab.title)
+        .sort((a, b) => {
+            if (a.id === activeTabId) return -1;
+            if (b.id === activeTabId) return 1;
+            return (activityData[b.id] || 0) - (activityData[a.id] || 0);
+        });
+}
+
+async function captureActiveTabPreview(windowId, activeTabId = null) {
+    try {
+        const resolvedActiveTabId = activeTabId ?? (await chrome.tabs.query({ active: true, windowId }))[0]?.id ?? null;
+        if (resolvedActiveTabId) {
+            await hideTabSwitcherOverlay(resolvedActiveTabId);
+            await new Promise(resolve => setTimeout(resolve, 5));
+        }
+        const dataUrl = await chrome.tabs.captureVisibleTab(windowId, {
+            format: 'jpeg',
+            quality: 45
+        });
+        const [activeTab] = await chrome.tabs.query({ active: true, windowId });
+        if (activeTab?.id && dataUrl) {
+            tabPreviewCache.set(activeTab.id, dataUrl);
+        }
+    } catch (error) {
+        Logger.log('[Background] Could not capture tab preview for switcher:', error);
+    }
+}
+
+async function showTabSwitcherOverlay(targetTabId, tabs, selectedTabId) {
+    const targetTab = tabs.find(tab => tab.id === targetTabId);
+    if (!targetTab || !supportsContentScripts(targetTab.url)) {
+        return;
+    }
+
+    const pendingHideTimer = pendingTabSwitcherHideTimers.get(targetTabId);
+    if (pendingHideTimer) {
+        clearTimeout(pendingHideTimer);
+        pendingTabSwitcherHideTimers.delete(targetTabId);
+    }
+
+    const overlayTabs = tabs.slice(0, TAB_SWITCHER_HISTORY_LIMIT).map(tab => ({
+        id: tab.id,
+        title: tab.title,
+        url: tab.url,
+        favIconUrl: tab.favIconUrl || null,
+        previewDataUrl: tabPreviewCache.get(tab.id) || null
+    }));
+
+    await chrome.scripting.executeScript({
+        target: { tabId: targetTabId },
+        func: (overlayItems, currentSelectedTabId) => {
+                let container = document.getElementById('arcify-tab-switcher');
+                if (!container) {
+                    container = document.createElement('div');
+                    container.id = 'arcify-tab-switcher';
+                    container.style.cssText = `
+                        position: fixed;
+                        inset: 0;
+                        pointer-events: none;
+                        z-index: 2147483647;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                    `;
+                    document.documentElement.appendChild(container);
+                }
+
+                const escapeHtml = (value = '') => value
+                    .replaceAll('&', '&amp;')
+                    .replaceAll('<', '&lt;')
+                    .replaceAll('>', '&gt;')
+                    .replaceAll('"', '&quot;')
+                    .replaceAll("'", '&#39;');
+
+                const cards = overlayItems.map(tab => {
+                    const isSelected = tab.id === currentSelectedTabId;
+                    const faviconUrl = tab.favIconUrl || `https://www.google.com/s2/favicons?domain=${encodeURIComponent(tab.url || '')}&sz=32`;
+                    const previewMarkup = tab.previewDataUrl
+                        ? `<div style="height: 108px; border-radius: 12px; overflow: hidden; background: #1f1f1f; margin-bottom: 10px;">
+                                <img src="${tab.previewDataUrl}" alt="" style="width: 100%; height: 100%; object-fit: cover; display: block;">
+                           </div>`
+                        : `<div style="height: 108px; border-radius: 12px; background: linear-gradient(135deg, rgba(255,255,255,.08), rgba(255,255,255,.02)); margin-bottom: 10px; display:flex; align-items:center; justify-content:center;">
+                                <img src="${faviconUrl}" alt="" style="width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;">
+                           </div>`;
+                    return `
+                        <div style="
+                            width: 220px;
+                            border-radius: 18px;
+                            padding: 12px;
+                            background: ${isSelected ? 'rgba(56, 189, 248, 0.2)' : 'rgba(26, 26, 26, 0.92)'};
+                            border: 1px solid ${isSelected ? 'rgba(56, 189, 248, 0.6)' : 'rgba(255,255,255,0.08)'};
+                            box-shadow: ${isSelected ? '0 16px 40px rgba(14, 165, 233, 0.18)' : '0 12px 32px rgba(0,0,0,0.35)'};
+                            color: white;
+                            backdrop-filter: blur(18px);
+                        ">
+                            ${previewMarkup}
+                            <div style="display:flex; align-items:center; gap: 10px;">
+                                <img src="${faviconUrl}" alt="" style="width:16px; height:16px; border-radius:4px; flex-shrink:0;">
+                                <div style="min-width:0;">
+                                    <div style="font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(tab.title || 'Untitled')}</div>
+                                    <div style="font-size: 11px; color: rgba(255,255,255,.65); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(tab.url || '')}</div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                container.innerHTML = `
+                    <div style="
+                        display:flex;
+                        gap: 14px;
+                        align-items: stretch;
+                        justify-content: center;
+                        max-width: min(92vw, 1120px);
+                        padding: 18px;
+                    ">
+                        ${cards}
+                    </div>
+                `;
+
+                if (window.arcifyTabSwitcherHideTimer) {
+                    clearTimeout(window.arcifyTabSwitcherHideTimer);
+                }
+
+                window.arcifyTabSwitcherHideTimer = setTimeout(() => {
+                    document.getElementById('arcify-tab-switcher')?.remove();
+                    window.arcifyTabSwitcherHideTimer = null;
+                }, 1300);
+        },
+        args: [overlayTabs, selectedTabId]
+    });
+}
+
+async function showTabSwitcherOverlayWithRetry(tabId, tabs, selectedTabId, retries = 2) {
+    if (!tabId) {
+        return;
+    }
+
+    try {
+        await showTabSwitcherOverlay(tabId, tabs, selectedTabId);
+    } catch (error) {
+        if (retries <= 0) {
+            throw error;
+        }
+        await new Promise(resolve => setTimeout(resolve, 120));
+        await showTabSwitcherOverlayWithRetry(tabId, tabs, selectedTabId, retries - 1);
+    }
+}
+
+async function hideTabSwitcherOverlay(tabId) {
+    if (!tabId) {
+        return;
+    }
+
+    const pendingHideTimer = pendingTabSwitcherHideTimers.get(tabId);
+    if (pendingHideTimer) {
+        clearTimeout(pendingHideTimer);
+        pendingTabSwitcherHideTimers.delete(tabId);
+    }
+
+    try {
+        const tab = await chrome.tabs.get(tabId);
+        if (!supportsContentScripts(tab?.url)) {
+            return;
+        }
+        await chrome.scripting.executeScript({
+            target: { tabId },
+            func: () => {
+                if (window.arcifyTabSwitcherHideTimer) {
+                    clearTimeout(window.arcifyTabSwitcherHideTimer);
+                    window.arcifyTabSwitcherHideTimer = null;
+                }
+                document.getElementById('arcify-tab-switcher')?.remove();
+            }
+        });
+    } catch (error) {
+        Logger.log('[Background] Could not hide tab switcher overlay:', error);
+    }
+}
+
+async function switchRecentTab() {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!activeTab?.id || !activeTab.windowId) {
+        return;
+    }
+
+    await captureActiveTabPreview(activeTab.windowId, activeTab.id);
+
+    let sessionTabs = tabSwitcherSession?.tabs || null;
+    if (!tabSwitcherSession || tabSwitcherSession.windowId !== activeTab.windowId) {
+        sessionTabs = (await getRecentTabsForWindow(activeTab.windowId, activeTab.id))
+            .slice(0, TAB_SWITCHER_HISTORY_LIMIT);
+        if (sessionTabs.length < 2) {
+            return;
+        }
+
+        tabSwitcherSession = {
+            windowId: activeTab.windowId,
+            tabs: sessionTabs,
+            currentIndex: 1,
+            timeoutId: null
+        };
+    } else {
+        sessionTabs = tabSwitcherSession.tabs || [];
+        if (sessionTabs.length < 2) {
+            resetTabSwitcherSession();
+            return;
+        }
+        tabSwitcherSession.currentIndex = (tabSwitcherSession.currentIndex + 1) % sessionTabs.length;
+    }
+
+    scheduleTabSwitcherSessionReset();
+
+    const targetTabId = tabSwitcherSession.tabs[tabSwitcherSession.currentIndex]?.id;
+    const targetTab = sessionTabs.find(tab => tab.id === targetTabId);
+    if (!targetTab) {
+        return;
+    }
+
+    await showTabSwitcherOverlayWithRetry(activeTab.id, sessionTabs, targetTab.id);
+    await chrome.tabs.update(targetTab.id, { active: true });
+    await chrome.windows.update(targetTab.windowId, { focused: true });
+    await new Promise(resolve => setTimeout(resolve, 80));
+    await showTabSwitcherOverlayWithRetry(targetTab.id, sessionTabs, targetTab.id);
+    if (activeTab.id !== targetTab.id) {
+        const hideTimer = setTimeout(() => {
+            pendingTabSwitcherHideTimers.delete(activeTab.id);
+            hideTabSwitcherOverlay(activeTab.id);
+        }, 150);
+        pendingTabSwitcherHideTimers.set(activeTab.id, hideTimer);
+    }
+}
 
 // Track tabs that have spotlight open for efficient closing.
 // Mainly used to close spotlight overlays in all tabs when it's
@@ -125,17 +444,17 @@ chrome.commands.onCommand.addListener(async function (command) {
 const spotlightOpenTabs = new Set();
 
 // Close spotlight in tracked tabs only
-async function closeSpotlightInTrackedTabs() {
+async function closeSpotlightInTrackedTabs(excludedTabId = null) {
     try {
-        const closePromises = Array.from(spotlightOpenTabs).map(tabId =>
-            chrome.tabs.sendMessage(tabId, { action: 'closeSpotlight' }).catch(() => {
-                // Remove from tracking if tab no longer exists or script not loaded
-                spotlightOpenTabs.delete(tabId);
-            })
+        const tabIds = Array.from(spotlightOpenTabs).filter(
+            tabId => tabId !== excludedTabId
+        );
+        const closePromises = tabIds.map(tabId =>
+            chrome.tabs.sendMessage(tabId, { action: 'closeSpotlight' })
+                .catch(() => {})
+                .finally(() => spotlightOpenTabs.delete(tabId))
         );
         await Promise.all(closePromises);
-        // Clear the set after closing
-        spotlightOpenTabs.clear();
     } catch (error) {
         Logger.error('[Background] Error closing spotlight in tracked tabs:', error);
     }
@@ -206,12 +525,22 @@ async function injectSpotlightScript(spotlightTabMode) {
             return;
         }
 
-        // First, close any existing spotlights in tracked tabs
-        await closeSpotlightInTrackedTabs();
-
         // Get the active tab
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (tab) {
+            await closeSpotlightInTrackedTabs(tab.id);
+
+            const spotlightNewTabUrl = chrome.runtime.getURL('spotlight/newtab.html');
+            if (
+                spotlightTabMode === SpotlightTabMode.NEW_TAB &&
+                tab.url?.startsWith(spotlightNewTabUrl)
+            ) {
+                chrome.runtime
+                    .sendMessage({ action: 'focusSpotlightNewTab' })
+                    .catch(() => {});
+                return;
+            }
+
             // Check if the tab URL supports content scripts
             // If not, skip directly to custom new tab fallback
             if (!supportsContentScripts(tab.url)) {
@@ -219,27 +548,33 @@ async function injectSpotlightScript(spotlightTabMode) {
                 await fallbackToChromeTabs(spotlightTabMode);
                 return;
             }
-            // PRIMARY: Try to send activation message to dormant content script
-            // This is 20-40x faster than script injection (50-100ms vs 1-2s)
+            const activationMessage = {
+                action: 'activateSpotlight',
+                mode: spotlightTabMode,
+                tabUrl: tab.url,
+                tabId: tab.id
+            };
             try {
-                const response = await chrome.tabs.sendMessage(tab.id, {
-                    action: 'activateSpotlight',
-                    mode: spotlightTabMode,
-                    tabUrl: tab.url,
-                    tabId: tab.id
+                await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    files: ['spotlight/overlay.js']
                 });
-
-                if (response && response.success) {
-                    // Success! Spotlight activated instantly via messaging
-                    chrome.runtime.sendMessage({
-                        action: 'spotlightOpened',
-                        mode: spotlightTabMode
-                    });
-                    return; // Exit early - no need for fallbacks
+                const response = await chrome.tabs.sendMessage(tab.id, activationMessage);
+                if (!response?.success) {
+                    throw new Error(
+                        response?.error || 'Spotlight activation was not acknowledged'
+                    );
                 }
-            } catch (messageError) {
-                Logger.log("Content script messaging failed, using new tab fallback:", messageError);
-                // If messaging fails, fall back to opening spotlight in a new tab
+                chrome.runtime.sendMessage({
+                    action: 'spotlightRelayStarted',
+                    tabId: tab.id
+                }).catch(() => {});
+                return;
+            } catch (activationError) {
+                Logger.log(
+                    "Fresh Spotlight activation failed, using new tab fallback:",
+                    activationError
+                );
                 await fallbackToChromeTabs(spotlightTabMode);
                 return;
             }
@@ -431,22 +766,13 @@ async function runAutoArchiveCheck() {
         const activityResult = await chrome.storage.local.get(TAB_ACTIVITY_STORAGE_KEY);
         const tabActivity = activityResult[TAB_ACTIVITY_STORAGE_KEY] || {};
 
-        // --- Fetch spaces data to check against bookmarks ---
-        const spacesResult = await chrome.storage.local.get('spaces');
-        const spaces = spacesResult.spaces || [];
+        const sidebarState = await Utils.getSidebarState();
         const bookmarkedUrls = new Set();
-        spaces.forEach(space => {
-            if (space.spaceBookmarks) {
-                // Assuming spaceBookmarks stores URLs directly.
-                // If it stores tab IDs or other objects, adjust this logic.
-                space.spaceBookmarks.forEach(bookmark => {
-                    // Check if bookmark is an object with a url or just a url string
-                    if (typeof bookmark === 'string') {
-                        bookmarkedUrls.add(bookmark);
-                    } else if (bookmark && bookmark.url) {
-                        bookmarkedUrls.add(bookmark.url);
-                    }
-                });
+        (sidebarState.pinnedTabIds || []).forEach(bookmark => {
+            if (typeof bookmark === 'string') {
+                bookmarkedUrls.add(bookmark);
+            } else if (bookmark && bookmark.url) {
+                bookmarkedUrls.add(bookmark.url);
             }
         });
 
@@ -486,19 +812,11 @@ async function runAutoArchiveCheck() {
         for (const tab of tabsToArchive) {
             const tabData = {
                 url: tab.url,
-                name: tab.title || tab.url, // Use URL if title is empty
-                spaceId: tab.groupId // Archive within its current group/space
+                name: tab.title || tab.url
             };
-
-            // Check if spaceId is valid (i.e., tab is actually in a group)
-            if (tabData.spaceId && tabData.spaceId !== chrome.tabGroups.TAB_GROUP_ID_NONE) {
-                await Utils.addArchivedTab(tabData);
-                await chrome.tabs.remove(tab.id); // Close the tab after archiving
-                await removeTabLastActivity(tab.id); // Remove activity timestamp after archiving
-            } else {
-                // Decide if you want to update its activity or leave it for next check
-                // await updateTabLastActivity(tab.id);
-            }
+            await Utils.addArchivedTab(tabData);
+            await chrome.tabs.remove(tab.id);
+            await removeTabLastActivity(tab.id);
         }
 
     } catch (error) {
@@ -533,28 +851,52 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === 'local' && TAB_ACTIVITY_STORAGE_KEY in changes) {
         // This might be less reliable than using tab removal events
     }
+
+    if (areaName === 'local' && changes.pinnedTabStatesById) {
+        const oldStates = changes.pinnedTabStatesById.oldValue || {};
+        const newStates = changes.pinnedTabStatesById.newValue || {};
+        const changedTabIds = new Set([
+            ...Object.keys(oldStates),
+            ...Object.keys(newStates)
+        ]);
+
+        changedTabIds.forEach(tabId => {
+            sendPinnedNavigationGuardState(parseInt(tabId, 10));
+        });
+    }
 });
 
 // Track tab activation
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
+    invalidateSpotlightSearchCache();
     await updateTabLastActivity(activeInfo.tabId);
 
     // Close any open spotlights when switching tabs
     await closeSpotlightInTrackedTabs();
+
+    await sendPinnedNavigationGuardState(activeInfo.tabId);
 });
 
 // Track tab updates (e.g., audible status changes)
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    if (changeInfo.url !== undefined || changeInfo.title !== undefined) {
+        invalidateSpotlightSearchCache();
+    }
     // If a tab becomes active (e.g., navigation finishes) or audible, update its timestamp
     if (changeInfo.status === 'complete' || changeInfo.audible !== undefined) {
         if (tab.active || tab.audible) {
             await updateTabLastActivity(tabId);
         }
     }
+
+    if (changeInfo.status === 'loading' || changeInfo.status === 'complete') {
+        await sendPinnedNavigationGuardState(tabId);
+    }
 });
 
 // Clean up timestamp when a tab is closed
 chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
+    invalidateSpotlightSearchCache();
     await removeTabLastActivity(tabId);
 
     // Clean up tab name override for closed tab
@@ -566,10 +908,15 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
     }
 });
 
+chrome.tabs.onCreated.addListener(invalidateSpotlightSearchCache);
+
 // Optional: Listen for messages from options page to immediately update alarm
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
-    if (message.action === 'updateAutoArchiveSettings') {
+    if (message.command === 'toggleSpotlightNewTab') {
+        void injectSpotlightScript(SpotlightTabMode.NEW_TAB);
+        return false;
+    } else if (message.action === 'updateAutoArchiveSettings') {
         Logger.log("Received message to update auto-archive settings.");
         setupAutoArchiveAlarm();
         sendResponse({ success: true });
@@ -578,6 +925,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         chrome.tabs.create({ url: message.url });
         sendResponse({ success: true });
         return false; // Synchronous response
+    } else if (message.action === 'getPinnedNavigationGuardState') {
+        return handleAsyncMessage(async () => {
+            const tabId = sender.tab?.id;
+            return await getPinnedNavigationGuardStateForTab(tabId);
+        }, sendResponse, 'getting pinned navigation guard state');
+    } else if (message.action === 'ensurePinnedNavigationGuard') {
+        return handleAsyncMessage(async () => {
+            await sendPinnedNavigationGuardState(message.tabId);
+            return {};
+        }, sendResponse, 'ensuring pinned navigation guard');
+    } else if (message.action === 'openPinnedNavigationLink') {
+        return handleAsyncMessage(async () => {
+            return await openPinnedNavigationLink({
+                sourceTabId: sender.tab?.id,
+                url: message.url
+            });
+        }, sendResponse, 'opening pinned navigation link', { tabId: null });
     } else if (message.action === 'navigateToDefaultNewTab') {
         // Handle navigation to default new tab when custom new tab is disabled
         (async () => {
@@ -671,19 +1035,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return { pinnedTabs };
         }, sendResponse, 'getting pinned tabs', { pinnedTabs: [] });
 
-    } else if (message.action === 'getActiveSpaceColor') {
+    } else if (message.action === 'getActiveCollectionColor') {
         return handleAsyncMessage(async () => {
-            const spacesResult = await chrome.storage.local.get('spaces');
-            const spaces = spacesResult.spaces || [];
-            const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-            if (!activeTab || !activeTab.groupId || activeTab.groupId === chrome.tabGroups.TAB_GROUP_ID_NONE) {
-                return { color: 'purple' };
-            }
-
-            const activeSpace = spaces.find(space => space.id === activeTab.groupId);
-            return { color: activeSpace?.color || 'purple' };
-        }, sendResponse, 'getting active space color', { color: 'purple' });
+            const sidebarState = await Utils.getSidebarState();
+            return { color: sidebarState?.color || 'purple' };
+        }, sendResponse, 'getting active sidebar color', { color: 'purple' });
 
     } else if (message.action === 'performSearch') {
         return handleAsyncMessage(async () => {
@@ -721,16 +1077,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Track when spotlight closes in a tab
         if (sender.tab && sender.tab.id) {
             spotlightOpenTabs.delete(sender.tab.id);
+            chrome.runtime.sendMessage({
+                action: 'spotlightRelayStopped',
+                tabId: sender.tab.id
+            }).catch(() => {});
         }
         return false;
-    } else if (message.action === 'activatePinnedTab') {
-        // Only forward if this came from overlay mode (content script)
-        // Popup mode can send directly to sidebar, so don't forward to prevent double tabs
-        if (sender.tab) {  // Message came from content script (overlay)
-            chrome.runtime.sendMessage(message);
-        }
-        sendResponse({ success: true });
-        return false; // Synchronous response
     }
 
     return false; // No async response needed

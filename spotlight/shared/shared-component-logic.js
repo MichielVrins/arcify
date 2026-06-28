@@ -15,6 +15,19 @@
 import { SpotlightUtils } from './ui-utilities.js';
 
 export class SharedSpotlightLogic {
+    static getResultBucket(result) {
+        switch (result?.type) {
+            case 'pinned-tab':
+                return 3;
+            case 'open-tab':
+                return 2;
+            case 'search-query':
+            case 'url-suggestion':
+                return 1;
+            default:
+                return 0;
+        }
+    }
 
     /**
      * Combine instant and async suggestions with deduplication
@@ -38,7 +51,12 @@ export class SharedSpotlightLogic {
             }
         }
 
-        return combined;
+        return combined.sort((a, b) => {
+            const bucketDifference =
+                SharedSpotlightLogic.getResultBucket(b) -
+                SharedSpotlightLogic.getResultBucket(a);
+            return bucketDifference || (b.score || 0) - (a.score || 0);
+        });
     }
 
     /**
@@ -151,34 +169,4 @@ export class SharedSpotlightLogic {
         });
     }
 
-
-    /**
-     * Handle input events with debouncing
-     * @param {Function} onInstantUpdate - Handler for instant suggestions (no debounce)
-     * @param {Function} onAsyncUpdate - Handler for async suggestions (debounced)
-     * @param {number} debounceDelay - Debounce delay in ms (default: 150)
-     * @returns {Function} Input event handler
-     */
-    static createInputHandler(onInstantUpdate, onAsyncUpdate, debounceDelay = 150) {
-        let debounceTimeout = null;
-
-        return (e) => {
-            // Clear previous debounced call
-            if (debounceTimeout) {
-                clearTimeout(debounceTimeout);
-            }
-
-            // Call instant update immediately
-            if (onInstantUpdate) {
-                onInstantUpdate(e);
-            }
-
-            // Debounce async update
-            if (onAsyncUpdate) {
-                debounceTimeout = setTimeout(() => {
-                    onAsyncUpdate(e);
-                }, debounceDelay);
-            }
-        };
-    }
 }

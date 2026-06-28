@@ -25,15 +25,6 @@
     <div class="options-container">
         <h1 class="options-title">Arcify Settings</h1>
 
-        <div class="options-setting-item">
-            <label for="defaultSpaceName" class="options-label">Default Space:</label>
-            <select id="defaultSpaceName" class="options-input">
-                <option value="">Loading spaces...</option>
-            </select>
-            <small class="options-description">On startup with no tab groups, Arcify will put all the open tabs into
-                this space.</small>
-        </div>
-
         <div class="options-setting-item options-setting-toggle">
             <label for="autoArchiveEnabled" class="options-label">Enable Auto-Archiving:</label>
             <div class="toggle-switch-container">
@@ -47,16 +38,6 @@
             <input type="number" id="autoArchiveIdleMinutes" class="options-input" min="1" step="1">
             <small class="options-description">Tabs inactive for this duration (and not pinned or audible) will be
                 archived.</small>
-        </div>
-
-        <div class="options-setting-item options-setting-toggle">
-            <label for="invertTabOrder" class="options-label">Invert Tab Order:</label>
-            <div class="toggle-switch-container">
-                <input type="checkbox" id="invertTabOrder" class="ios-toggle">
-                <label for="invertTabOrder" class="toggle-label"></label>
-            </div>
-            <small class="options-description">When enabled (default), new tabs appear at the top. Disable to match
-                Chrome's order (new tabs at bottom).</small>
         </div>
 
         <div class="options-setting-item options-setting-toggle">

@@ -12,6 +12,15 @@ export class BaseDataProvider {
         this.cacheTimeout = 5000;
     }
 
+    getSearchableUrl(url = '') {
+        try {
+            const parsed = new URL(url);
+            return `${parsed.origin}${parsed.pathname}`.toLowerCase();
+        } catch {
+            return url.split(/[?#]/, 1)[0].toLowerCase();
+        }
+    }
+
     // ABSTRACT DATA FETCHERS (must be implemented by subclasses)
     async getOpenTabsData(query = '') { 
         throw new Error('getOpenTabsData must be implemented by subclass'); 
@@ -204,11 +213,9 @@ export class BaseDataProvider {
                     title: pinnedTab.title,
                     url: pinnedTab.url,
                     metadata: { 
-                        bookmarkId: pinnedTab.id,
-                        spaceId: pinnedTab.spaceId,
-                        spaceName: pinnedTab.spaceName,
-                        spaceColor: pinnedTab.spaceColor,
+                        pinnedItemId: pinnedTab.id,
                         tabId: pinnedTab.tabId,
+                        windowId: pinnedTab.windowId,
                         isActive: pinnedTab.isActive
                     }
                 });
@@ -227,12 +234,18 @@ export class BaseDataProvider {
         try {
             const bookmarksData = await this.getBookmarksData(query);
             
-            const results = bookmarksData.map(bookmark => new SearchResult({
+            const normalizedQuery = query.toLowerCase();
+            const results = bookmarksData
+                .filter(bookmark =>
+                    bookmark.title?.toLowerCase().includes(normalizedQuery) ||
+                    this.getSearchableUrl(bookmark.url).includes(normalizedQuery)
+                )
+                .map(bookmark => new SearchResult({
                 type: ResultType.BOOKMARK,
                 title: bookmark.title,
                 url: bookmark.url,
                 metadata: { bookmarkId: bookmark.id }
-            }));
+                }));
             return results;
         } catch (error) {
             Logger.error('[SearchProvider-Bookmarks] Error getting bookmark suggestions:', error);
@@ -245,12 +258,18 @@ export class BaseDataProvider {
         try {
             const historyData = await this.getHistoryData(query);
             
-            const results = historyData.map(item => new SearchResult({
+            const normalizedQuery = query.toLowerCase();
+            const results = historyData
+                .filter(item =>
+                    item.title?.toLowerCase().includes(normalizedQuery) ||
+                    this.getSearchableUrl(item.url).includes(normalizedQuery)
+                )
+                .map(item => new SearchResult({
                 type: ResultType.HISTORY,
                 title: item.title || item.url,
                 url: item.url,
                 metadata: { visitCount: item.visitCount, lastVisitTime: item.lastVisitTime }
-            }));
+                }));
             return results;
         } catch (error) {
             Logger.error('[SearchProvider-History] Error getting history suggestions:', error);
@@ -354,13 +373,26 @@ export class BaseDataProvider {
 
         const queryLower = query.toLowerCase();
         const titleLower = result.title.toLowerCase();
-        const urlLower = result.url.toLowerCase();
+        const urlLower = this.getSearchableUrl(result.url);
+
+        const titleMatches = titleLower.includes(queryLower);
+        const urlMatches = urlLower.includes(queryLower);
 
         if (titleLower === queryLower) baseScore += SCORE_BONUSES.EXACT_TITLE_MATCH;
         else if (titleLower.startsWith(queryLower)) baseScore += SCORE_BONUSES.TITLE_STARTS_WITH;
-        else if (titleLower.includes(queryLower)) baseScore += SCORE_BONUSES.TITLE_CONTAINS;
+        else if (titleMatches) baseScore += SCORE_BONUSES.TITLE_CONTAINS;
 
-        if (urlLower.includes(queryLower)) baseScore += SCORE_BONUSES.URL_CONTAINS;
+        if (urlMatches) baseScore += SCORE_BONUSES.URL_CONTAINS;
+
+        const isOpen = result.type === ResultType.OPEN_TAB ||
+            (result.type === ResultType.PINNED_TAB && result.metadata?.isActive);
+        if (isOpen && (titleMatches || urlMatches)) {
+            baseScore += SCORE_BONUSES.OPEN_TAB_MATCH;
+            baseScore = Math.min(
+                baseScore,
+                BASE_SCORES.INSTANT_SEARCH_QUERY + 1
+            );
+        }
 
         return Math.max(0, baseScore);
     }
@@ -499,7 +531,9 @@ export class BaseDataProvider {
         // Use the same priority order as BASE_SCORES for consistency
         const typePriorities = {
             'open-tab': BASE_SCORES.OPEN_TAB,
-            'pinned-tab': BASE_SCORES.PINNED_TAB,
+            'pinned-tab': result.metadata?.isActive
+                ? BASE_SCORES.OPEN_TAB + 1
+                : BASE_SCORES.PINNED_TAB,
             'bookmark': BASE_SCORES.BOOKMARK,
             'history': BASE_SCORES.HISTORY,
             'top-site': result.metadata?.fuzzyMatch ? 

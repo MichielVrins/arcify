@@ -2,7 +2,7 @@
 
 import { BaseDataProvider } from './base-data-provider.js';
 import { AutocompleteProvider } from './autocomplete-provider.js';
-import { BookmarkUtils } from '../../../bookmark-utils.js';
+import { Utils } from '../../../utils.js';
 import { Logger } from '../../../logger.js';
 
 const TAB_ACTIVITY_STORAGE_KEY = 'tabLastActivity';
@@ -25,7 +25,7 @@ export class BackgroundDataProvider extends BaseDataProvider {
                 if (!tab.title || !tab.url) return false;
                 if (!query) return true;
                 return tab.title.toLowerCase().includes(query.toLowerCase()) || 
-                       tab.url.toLowerCase().includes(query.toLowerCase());
+                       this.getSearchableUrl(tab.url).includes(query.toLowerCase());
             });
             
             return filteredTabs;
@@ -57,15 +57,24 @@ export class BackgroundDataProvider extends BaseDataProvider {
         }
     }
 
-    async getBookmarksData(query) {
-        return await BookmarkUtils.getBookmarksData(query);
+    async openPinnedTab(pinnedItemId, pinnedUrl) {
+        if (!pinnedItemId || !pinnedUrl) {
+            throw new Error('Pinned tab result is missing its item ID or URL');
+        }
+        const tab = await chrome.tabs.create({ url: pinnedUrl, active: false });
+        await Utils.setPinnedTabState(tab.id, { pinnedItemId, pinnedUrl });
+        await chrome.runtime.sendMessage({
+            action: 'pinnedTabOpened',
+            tabId: tab.id,
+            pinnedItemId
+        }).catch(() => {});
+        await chrome.tabs.update(tab.id, { active: true });
+        await chrome.windows.update(tab.windowId, { focused: true });
     }
 
-    isUnderArcifyFolder(bookmark, arcifyFolderId) {
-        // Simple heuristic: check if the bookmark's parent path includes the Arcify folder
-        // This is a simplified check - for a more robust solution, we'd need to traverse up the parent chain
-        return bookmark.parentId && (bookmark.parentId === arcifyFolderId || 
-               bookmark.parentId.startsWith(arcifyFolderId));
+    async getBookmarksData(query) {
+        const bookmarks = await chrome.bookmarks.search(query);
+        return bookmarks.filter(bookmark => Boolean(bookmark.url));
     }
 
     async getHistoryData(query) {
@@ -102,70 +111,40 @@ export class BackgroundDataProvider extends BaseDataProvider {
     }
 
     async getPinnedTabsData(query = '') {
-        Logger.log('[BackgroundDataProvider] getPinnedTabsData called with query:', query);
         try {
-            // Get spaces from storage
-            const storage = await chrome.storage.local.get('spaces');
-            const spaces = storage.spaces || [];
-            Logger.log('[BackgroundDataProvider] Found spaces:', spaces.length, spaces.map(s => s.name));
-            
-            // Get current tabs
+            const sidebarState = await Utils.getSidebarState();
             const tabs = await chrome.tabs.query({});
-            Logger.log('[BackgroundDataProvider] Found tabs:', tabs.length);
-            
-            // Get Arcify folder structure using robust method
-            const arcifyFolder = await BookmarkUtils.findArcifyFolder();
-            if (!arcifyFolder) {
-                Logger.log('[BackgroundDataProvider] No Arcify folder found');
-                return [];
-            }
-            Logger.log('[BackgroundDataProvider] Found Arcify folder:', arcifyFolder.id);
-
-            const spaceFolders = await chrome.bookmarks.getChildren(arcifyFolder.id);
-            Logger.log('[BackgroundDataProvider] Found space folders:', spaceFolders.length, spaceFolders.map(f => f.title));
-            const pinnedTabs = [];
-
-            // Process each space folder
-            for (const spaceFolder of spaceFolders) {
-                const space = spaces.find(s => s.name === spaceFolder.title);
-                Logger.log('[BackgroundDataProvider] Processing space folder:', spaceFolder.title, 'found space:', !!space);
-                if (!space) continue;
-
-                // Get all bookmarks in this space folder (recursively)
-                const bookmarks = await BookmarkUtils.getBookmarksFromFolderRecursive(spaceFolder.id);
-                Logger.log('[BackgroundDataProvider] Found bookmarks in', spaceFolder.title, ':', bookmarks.length);
-                
-                for (const bookmark of bookmarks) {
-                    // Check if there's a matching open tab
-                    const matchingTab = BookmarkUtils.findTabByUrl(tabs, bookmark.url);
-                    Logger.log('[BackgroundDataProvider] Processing bookmark:', bookmark.title, 'matching tab:', !!matchingTab);
-                    
-                    // Apply query filter
-                    if (query) {
-                        const queryLower = query.toLowerCase();
-                        const titleMatch = bookmark.title.toLowerCase().includes(queryLower);
-                        const urlMatch = bookmark.url.toLowerCase().includes(queryLower);
-                        if (!titleMatch && !urlMatch) {
-                            Logger.log('[BackgroundDataProvider] Bookmark filtered out by query:', bookmark.title);
-                            continue;
-                        }
-                    }
-
-                    const pinnedTab = {
-                        ...bookmark,
-                        spaceId: space.id,
-                        spaceName: space.name,
-                        spaceColor: space.color,
-                        tabId: matchingTab?.id || null,
-                        isActive: !!matchingTab
-                    };
-                    Logger.log('[BackgroundDataProvider] Adding pinned tab:', pinnedTab);
-                    pinnedTabs.push(pinnedTab);
+            const pinnedStatesById = await Utils.getPinnedTabStates();
+            const pinnedLinks = [];
+            Utils.walkPinnedItems(sidebarState.pinnedItems, item => {
+                if (item?.type === 'link' && item.url) {
+                    pinnedLinks.push(item);
                 }
-            }
+            });
 
-            Logger.log('[BackgroundDataProvider] Returning', pinnedTabs.length, 'pinned tabs');
-            return pinnedTabs;
+            const normalizedQuery = query.trim().toLowerCase();
+            const claimedTabIds = new Set();
+            return pinnedLinks
+                .filter(item => !normalizedQuery ||
+                    item.title.toLowerCase().includes(normalizedQuery) ||
+                    this.getSearchableUrl(item.url).includes(normalizedQuery))
+                .map(item => {
+                    const matchingTab = tabs.find(tab =>
+                        !claimedTabIds.has(tab.id) &&
+                        pinnedStatesById?.[tab.id]?.pinnedItemId === item.id
+                    ) || tabs.find(tab =>
+                        !claimedTabIds.has(tab.id) &&
+                        !pinnedStatesById?.[tab.id]?.pinnedItemId &&
+                        tab.url === item.url
+                    );
+                    if (matchingTab) claimedTabIds.add(matchingTab.id);
+                    return {
+                        ...item,
+                        tabId: matchingTab?.id || null,
+                        windowId: matchingTab?.windowId || null,
+                        isActive: Boolean(matchingTab)
+                    };
+                });
         } catch (error) {
             Logger.error('[BackgroundDataProvider] Error getting pinned tabs data:', error);
             return [];

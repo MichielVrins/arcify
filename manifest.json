@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "Arcify: Arc like vertical tab spaces",
+  "name": "Arcify",
   "version": "4.0.3",
   "description": "A sidebar extension that replicates Arc browser's tab management system",
   "permissions": [
     "tabs",
-    "tabGroups",
+    "activeTab",
     "sidePanel",
     "storage",
     "bookmarks",
@@ -17,6 +17,9 @@
     "topSites",
     "history",
     "clipboardWrite"
+  ],
+  "host_permissions": [
+    "<all_urls>"
   ],
   "side_panel": {
     "default_path": "sidebar.html"
@@ -44,7 +47,6 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "sidebar.js",
         "onboarding.js",
         "installation-onboarding.js",
         "assets/*",
@@ -69,32 +71,26 @@
       },
       "description": "Toggle side panel"
     },
-    "quickPinToggle": {
-      "suggested_key": {
-        "default": "Alt+D"
-      },
-      "description": "Quick Pin/Unpin Tab"
-    },
-    "NextTabInSpace": {
-      "description": "Navigates to next tab in space"
-    },
-    "PrevTabInSpace": {
-      "description": "Navigates to prev tab in space"
-    },
-    "toggleSpotlight": {
-      "suggested_key": {
-        "default": "Alt+L"
-      },
-      "description": "Current Tab URL"
-    },
     "toggleSpotlightNewTab": {
       "suggested_key": {
         "default": "Alt+T"
       },
-      "description": "New Tab"
+      "description": "Open Spotlight"
     },
     "copyCurrentUrl": {
       "description": "Copy current tab URL"
+    },
+    "recentTabSwitcher": {
+      "suggested_key": {
+        "default": "Alt+Tab"
+      },
+      "description": "Switch tabs in recent order"
+    },
+    "reloadExtension": {
+      "suggested_key": {
+        "default": "Alt+Shift+R"
+      },
+      "description": "Reload Arcify extension"
     }
   },
   "options_page": "options.html"
