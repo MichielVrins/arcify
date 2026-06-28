@@ -26,6 +26,10 @@ const SpotlightTabMode = {
 // Create a single SearchEngine instance with BackgroundDataProvider
 const backgroundSearchEngine = new SearchEngine(new BackgroundDataProvider());
 
+function invalidateSpotlightSearchCache() {
+    backgroundSearchEngine.cache.clear();
+}
+
 const AUTO_ARCHIVE_ALARM_NAME = 'autoArchiveTabsAlarm';
 const TAB_ACTIVITY_STORAGE_KEY = 'tabLastActivity'; // Key to store timestamps
 const TAB_SWITCHER_SESSION_TIMEOUT_MS = 1400;
@@ -165,8 +169,6 @@ if (chrome.contextMenus) {
 chrome.commands.onCommand.addListener(async function (command) {
     if (command === "recentTabSwitcher") {
         await switchRecentTab();
-    } else if (command === "toggleSpotlight") {
-        await injectSpotlightScript(SpotlightTabMode.CURRENT_TAB);
     } else if (command === "toggleSpotlightNewTab") {
         await injectSpotlightScript(SpotlightTabMode.NEW_TAB);
     } else if (command === "copyCurrentUrl") {
@@ -442,17 +444,17 @@ async function switchRecentTab() {
 const spotlightOpenTabs = new Set();
 
 // Close spotlight in tracked tabs only
-async function closeSpotlightInTrackedTabs() {
+async function closeSpotlightInTrackedTabs(excludedTabId = null) {
     try {
-        const closePromises = Array.from(spotlightOpenTabs).map(tabId =>
-            chrome.tabs.sendMessage(tabId, { action: 'closeSpotlight' }).catch(() => {
-                // Remove from tracking if tab no longer exists or script not loaded
-                spotlightOpenTabs.delete(tabId);
-            })
+        const tabIds = Array.from(spotlightOpenTabs).filter(
+            tabId => tabId !== excludedTabId
+        );
+        const closePromises = tabIds.map(tabId =>
+            chrome.tabs.sendMessage(tabId, { action: 'closeSpotlight' })
+                .catch(() => {})
+                .finally(() => spotlightOpenTabs.delete(tabId))
         );
         await Promise.all(closePromises);
-        // Clear the set after closing
-        spotlightOpenTabs.clear();
     } catch (error) {
         Logger.error('[Background] Error closing spotlight in tracked tabs:', error);
     }
@@ -523,12 +525,22 @@ async function injectSpotlightScript(spotlightTabMode) {
             return;
         }
 
-        // First, close any existing spotlights in tracked tabs
-        await closeSpotlightInTrackedTabs();
-
         // Get the active tab
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (tab) {
+            await closeSpotlightInTrackedTabs(tab.id);
+
+            const spotlightNewTabUrl = chrome.runtime.getURL('spotlight/newtab.html');
+            if (
+                spotlightTabMode === SpotlightTabMode.NEW_TAB &&
+                tab.url?.startsWith(spotlightNewTabUrl)
+            ) {
+                chrome.runtime
+                    .sendMessage({ action: 'focusSpotlightNewTab' })
+                    .catch(() => {});
+                return;
+            }
+
             // Check if the tab URL supports content scripts
             // If not, skip directly to custom new tab fallback
             if (!supportsContentScripts(tab.url)) {
@@ -536,27 +548,33 @@ async function injectSpotlightScript(spotlightTabMode) {
                 await fallbackToChromeTabs(spotlightTabMode);
                 return;
             }
-            // PRIMARY: Try to send activation message to dormant content script
-            // This is 20-40x faster than script injection (50-100ms vs 1-2s)
+            const activationMessage = {
+                action: 'activateSpotlight',
+                mode: spotlightTabMode,
+                tabUrl: tab.url,
+                tabId: tab.id
+            };
             try {
-                const response = await chrome.tabs.sendMessage(tab.id, {
-                    action: 'activateSpotlight',
-                    mode: spotlightTabMode,
-                    tabUrl: tab.url,
-                    tabId: tab.id
+                await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    files: ['spotlight/overlay.js']
                 });
-
-                if (response && response.success) {
-                    // Success! Spotlight activated instantly via messaging
-                    chrome.runtime.sendMessage({
-                        action: 'spotlightOpened',
-                        mode: spotlightTabMode
-                    });
-                    return; // Exit early - no need for fallbacks
+                const response = await chrome.tabs.sendMessage(tab.id, activationMessage);
+                if (!response?.success) {
+                    throw new Error(
+                        response?.error || 'Spotlight activation was not acknowledged'
+                    );
                 }
-            } catch (messageError) {
-                Logger.log("Content script messaging failed, using new tab fallback:", messageError);
-                // If messaging fails, fall back to opening spotlight in a new tab
+                chrome.runtime.sendMessage({
+                    action: 'spotlightRelayStarted',
+                    tabId: tab.id
+                }).catch(() => {});
+                return;
+            } catch (activationError) {
+                Logger.log(
+                    "Fresh Spotlight activation failed, using new tab fallback:",
+                    activationError
+                );
                 await fallbackToChromeTabs(spotlightTabMode);
                 return;
             }
@@ -850,6 +868,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
 // Track tab activation
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
+    invalidateSpotlightSearchCache();
     await updateTabLastActivity(activeInfo.tabId);
 
     // Close any open spotlights when switching tabs
@@ -860,6 +879,9 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 
 // Track tab updates (e.g., audible status changes)
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    if (changeInfo.url !== undefined || changeInfo.title !== undefined) {
+        invalidateSpotlightSearchCache();
+    }
     // If a tab becomes active (e.g., navigation finishes) or audible, update its timestamp
     if (changeInfo.status === 'complete' || changeInfo.audible !== undefined) {
         if (tab.active || tab.audible) {
@@ -874,6 +896,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 
 // Clean up timestamp when a tab is closed
 chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
+    invalidateSpotlightSearchCache();
     await removeTabLastActivity(tabId);
 
     // Clean up tab name override for closed tab
@@ -885,13 +908,12 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
     }
 });
 
+chrome.tabs.onCreated.addListener(invalidateSpotlightSearchCache);
+
 // Optional: Listen for messages from options page to immediately update alarm
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
-    if (message.command === 'toggleSpotlight') {
-        void injectSpotlightScript(SpotlightTabMode.CURRENT_TAB);
-        return false;
-    } else if (message.command === 'toggleSpotlightNewTab') {
+    if (message.command === 'toggleSpotlightNewTab') {
         void injectSpotlightScript(SpotlightTabMode.NEW_TAB);
         return false;
     } else if (message.action === 'updateAutoArchiveSettings') {
@@ -1055,16 +1077,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Track when spotlight closes in a tab
         if (sender.tab && sender.tab.id) {
             spotlightOpenTabs.delete(sender.tab.id);
+            chrome.runtime.sendMessage({
+                action: 'spotlightRelayStopped',
+                tabId: sender.tab.id
+            }).catch(() => {});
         }
         return false;
-    } else if (message.action === 'activatePinnedTab') {
-        // Only forward if this came from overlay mode (content script)
-        // Popup mode can send directly to sidebar, so don't forward to prevent double tabs
-        if (sender.tab) {  // Message came from content script (overlay)
-            chrome.runtime.sendMessage(message);
-        }
-        sendResponse({ success: true });
-        return false; // Synchronous response
     }
 
     return false; // No async response needed

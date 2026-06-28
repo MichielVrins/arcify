@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Arcify: Arc like vertical tab collections",
+  "name": "Arcify",
   "version": "4.0.3",
   "description": "A sidebar extension that replicates Arc browser's tab management system",
   "permissions": [
@@ -47,7 +47,6 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "sidebar.js",
         "onboarding.js",
         "installation-onboarding.js",
         "assets/*",
@@ -72,14 +71,11 @@
       },
       "description": "Toggle side panel"
     },
-    "toggleSpotlight": {
-      "suggested_key": {
-        "default": "Alt+L"
-      },
-      "description": "Current Tab URL"
-    },
     "toggleSpotlightNewTab": {
-      "description": "New Tab"
+      "suggested_key": {
+        "default": "Alt+T"
+      },
+      "description": "Open Spotlight"
     },
     "copyCurrentUrl": {
       "description": "Copy current tab URL"

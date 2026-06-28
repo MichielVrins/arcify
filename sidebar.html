@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,134 +7,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Varela+Round&display=swap" rel="stylesheet">
-    <style>
-        .varela-round-regular {
-            font-family: "Varela Round", sans-serif;
-            font-weight: 400;
-            font-style: normal;
-        }
-
-        h1, h2, h3, h4, h5, h6 {
-            font-family: "Varela Round", sans-serif;
-            font-style: normal;
-        }
-    </style>
     <link rel="stylesheet" href="styles.css">
 </head>
-
 <body>
-    <div id="sidebar-container" class="sidebar-container">
-        <div class="pinned-favicons" id="pinnedFavicons">
-            <!-- Persistent pinned tabs will be displayed here -->
-            <div class="pinned-placeholder-container">
-                <div class="pinned-tab-placeholder" aria-label="Drop to add favorite"></div>
-            </div>
-        </div>
-        <div class="tabs-view collections-list" id="tabsView">
-            <!-- Main tab list will be dynamically added here -->
-        </div>
-        <div class="new-tab-btn-container">
-            <div class="url-copy-toast" id="urlCopyToast">Copied current URL</div>
-            <button class="new-tab-btn" id="newTabBtn" title="Open a new tab">
-                <span>+</span> New Tab
-            </button>
-        </div>
-    </div>
-    <template id="sidebarTemplate">
-        <div class="sidebar-view collection">
-            <div id="sidebar-content" class="sidebar-content collection-content">
-                <div class="pinned-tabs">
-                    <!-- <h3>Pinned</h3> -->
-                    <div class="placeholder-container">
-                        <div class="tab-placeholder">Drag a tab here to pin</div>
-                    </div>
-                    <div class="tabs-container" data-tab-type="pinned">
-                        <template id="folderTemplate">
-                            <div class="folder collapsed">
-                                <div class="folder-header">
-                                    <div class="folder-icon"><svg xmlns="http://www.w3.org/2000/svg"
-                                            viewBox="0 0 512 512">
-                                            <path
-                                                d="M0 96C0 60.7 28.7 32 64 32l132.1 0c19.1 0 37.4 7.6 50.9 21.1L289.9 96 448 96c35.3 0 64 28.7 64 64l0 256c0 35.3-28.7 64-64 64L64 480c-35.3 0-64-28.7-64-64L0 96zM64 80c-8.8 0-16 7.2-16 16l0 320c0 8.8 7.2 16 16 16l384 0c8.8 0 16-7.2 16-16l0-256c0-8.8-7.2-16-16-16l-161.4 0c-10.6 0-20.8-4.2-28.3-11.7L213.1 87c-4.5-4.5-10.6-7-17-7L64 80z">
-                                            </path>
-                                        </svg></div>
-                                    <input type="text" class="folder-name" placeholder="Untitled">
-                                    <span class="folder-title hidden">Untitled</span>
-                                    <button class="folder-toggle collapsed" title="Toggle folder"></button>
-                                </div>
-                                <div class="folder-collapsed-tabs"></div>
-                                <div class="folder-content collapsed">
-                                    <div class="tab-placeholder">Drag a tab here to add</div>
-                                </div>
-                            </div>
-                        </template>
-                    </div>
-                </div>
-                <div class="temporary-tabs">
-                    <div class="temp-header">
-                        <div class="divider-line"></div>
-                        <button class="clean-tabs-btn">Clean All</button>
-                    </div>
-                    <div class="tabs-container" data-tab-type="temporary"></div>
-                </div>
-            </div>
-            <div class="sidebar-footer">
-                <div id="archived-tabs-popup" class="archived-tabs-popup">
-                    <h3>Archived</h3>
-                    <div class="archived-tabs-list"></div>
-                    <div class="no-archived-tabs-message">No archived tabs.</div>
-                </div>
-                <div class="sidebar-options-container collection-options-container footer-options-container">
-                    <button id="collection-options" class="collection-options footer-options-toggle" title="Options">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512" class="svg-icon">
-                            <path
-                                d="M296 376c0 22-18 40-40 40-22 0-40-18-40-40 0-22 18-40 40-40 22 0 40 18 40 40z m0-240c0 22-18 40-40 40-22 0-40-18-40-40 0-22 18-40 40-40 22 0 40 18 40 40z m0 120c0 22-18 40-40 40-22 0-40-18-40-40 0-22 18-40 40-40 22 0 40 18 40 40z" />
-                        </svg>
-                    </button>
-                    <div class="sidebar-options-dropdown collection-options-dropdown">
-                        <select class="sidebar-color-select collection-color-select" id="sidebarColorSelect">
-                            <option value="grey">Grey</option>
-                            <option value="blue">Blue</option>
-                            <option value="red">Red</option>
-                            <option value="yellow">Yellow</option>
-                            <option value="green">Green</option>
-                            <option value="pink">Pink</option>
-                            <option value="purple">Purple</option>
-                            <option value="cyan">Cyan</option>
-                        </select>
-                        <div class="color-picker-grid" id="sidebarColorSwatch">
-                            <div class="color-swatch" data-color="grey"></div>
-                            <div class="color-swatch" data-color="blue"></div>
-                            <div class="color-swatch" data-color="red"></div>
-                            <div class="color-swatch" data-color="yellow"></div>
-                            <div class="color-swatch" data-color="green"></div>
-                            <div class="color-swatch" data-color="pink"></div>
-                            <div class="color-swatch" data-color="purple"></div>
-                            <div class="color-swatch" data-color="cyan"></div>
-                        </div>
-                        <button class="archive-toggle-btn" id="archive-button">Archived Tabs</button>
-                        <button class="new-folder-btn">New Folder</button>
-                        <div class="options-separator"></div>
-                        <button class="settings-btn" id="sidebar-settings">Settings</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </template>
-    <template id="tabTemplate">
-        <div class="tab">
-            <div class="tab-surface">
-                <img class="tab-favicon" src="" alt="Favicon">
-                <div class="tab-details">
-                    <span class="tab-title-display"></span>
-                    <span class="tab-domain-display" style="display: none;"></span>
-                    <input type="text" class="tab-title-input" style="display: none;" spellcheck="false">
-                </div>
-                <button class="tab-close" title="Close Tab">×</button>
-            </div>
-        </div>
-    </template>
-    <script type="module" src="sidebar.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/sidebar/main.tsx"></script>
 </body>
-
 </html>

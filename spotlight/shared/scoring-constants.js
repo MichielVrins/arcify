@@ -14,9 +14,9 @@
 
 // Base scores for each result type (higher = appears first)
 export const BASE_SCORES = {
-    // Instant suggestions (always first)
-    INSTANT_SEARCH_QUERY: 1000,
-    INSTANT_URL_SUGGESTION: 1000,
+    // Generic actions rank highly, but exact open-tab matches can outrank them.
+    INSTANT_SEARCH_QUERY: 110,
+    INSTANT_URL_SUGGESTION: 110,
 
     // Regular search results hierarchy
     SEARCH_QUERY: 100,
@@ -42,7 +42,8 @@ export const SCORE_BONUSES = {
     EXACT_TITLE_MATCH: 20,      // Title exactly matches query
     TITLE_STARTS_WITH: 15,      // Title starts with query
     TITLE_CONTAINS: 10,         // Title contains query
-    URL_CONTAINS: 5             // URL contains query
+    URL_CONTAINS: 5,            // URL contains query
+    OPEN_TAB_MATCH: 35          // Prefer switching over reopening matching content
 };
 
 // Autocomplete score calculation (decreasing by position)

@@ -4,7 +4,156 @@
     box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+    height: 100%;
+}
+
+.sidebar-loading,
+.sidebar-error {
+    padding: 20px;
+}
+
+.react-favorite-slot {
+    flex: 1 1 calc(25% - 8px);
+    min-width: 0;
+    position: relative;
+}
+
+.react-tab-row {
+    max-height: 80px;
+    overflow: hidden;
+    transition:
+        max-height 140ms ease,
+        opacity 110ms ease,
+        transform 140ms ease;
+}
+
+.react-tab-row.closing {
+    max-height: 0;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-5px);
+}
+
+.react-favorite-drag {
+    border-radius: 12px;
+    width: 100%;
+    transform: skewX(0);
+}
+
+.favorite-title-input,
+.folder-title-input {
+    background: rgba(255, 255, 255, 0.55);
+    border: 1px solid rgba(0, 0, 0, 0.25);
+    border-radius: 6px;
+    color: inherit;
+    font: inherit;
+    min-width: 0;
+    outline: none;
+    padding: 4px 6px;
+    width: 100%;
+}
+
+.favorite-title-input {
+    height: 48px;
+    text-align: center;
+}
+
+.folder-title-input {
+    flex: 1;
+}
+
+.folder-draft {
+    margin-bottom: 4px;
+    margin-top: 4px;
+}
+
+.folder-header.folder-drop-active {
+    background: rgba(255, 255, 255, 0.28);
+}
+
+.drag-overlay-preview {
+    align-items: center;
+    background: #eceff1;
+    border-radius: 10px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
+    display: flex;
+    gap: 10px;
+    max-width: 280px;
+    min-width: 160px;
+    opacity: 0.92;
+    overflow: hidden;
+    padding: 10px 12px;
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+.drag-overlay-preview span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.react-drop-zone {
+    height: 6px;
+    margin: -3px 8px;
+    pointer-events: none;
+    position: relative;
+    z-index: 5;
+}
+
+.react-drop-zone.active::after {
+    background: currentColor;
+    border-radius: 2px;
+    content: "";
+    height: 2px;
+    left: 0;
+    position: absolute;
+    right: 0;
+    top: 2px;
+}
+
+.react-drop-zone-horizontal {
+    align-self: stretch;
+    min-width: 6px;
+    pointer-events: none;
+    position: relative;
+}
+
+.react-drop-zone-horizontal.active::after {
+    background: currentColor;
+    border-radius: 2px;
+    bottom: 4px;
+    content: "";
+    position: absolute;
+    top: 4px;
+    width: 2px;
+}
+
+.context-menu-backdrop {
+    inset: 0;
+    position: fixed;
+    z-index: 999;
+}
+
+.context-menu.react-context-menu {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    z-index: 9999;
+}
+
+.react-context-menu .context-menu-item {
+    border: 0;
+    text-align: left;
+    width: 100%;
+}
+
 :root {
+    --sidebar-surface: #fff8f6;
+    --sidebar-surface-hover: #f1e7e4;
+
     /* User color overrides (set via JavaScript, fallback to defaults) */
     --chrome-grey-color: var(--user-chrome-grey-color, #cccccc);
     --chrome-blue-color: var(--user-chrome-blue-color, #8bb3f3);
@@ -102,28 +251,40 @@ h3 {
 }
 
 .pinned-favicon {
-    width: 32px;
+    width: 100%;
     height: 48px;
-    flex: 1 1 24%;
+    border: 1px solid rgba(45, 32, 28, 0.08);
+    padding: 0;
     border-radius: 8px;
     transform: skewX(0deg);
     cursor: pointer;
-    transition: all 0.2s;
+    transition:
+        background-color 0.18s ease,
+        border-color 0.18s ease,
+        box-shadow 0.18s ease,
+        transform 0.18s ease;
     display: flex;
     align-items: center;
     justify-content: center;
-    background-color: rgba(255, 255, 255, 0.2);
+    background-color: rgba(255, 255, 255, 0.72);
+    box-shadow:
+        0 1px 2px rgba(45, 32, 28, 0.06),
+        0 5px 14px rgba(45, 32, 28, 0.07);
 }
 
 .pinned-favicon.active,
 .pinned-favicon.active:hover {
-    background-color: #ECEFF1;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    background-color: #eceff1;
+    border-color: rgba(45, 32, 28, 0.12);
+    box-shadow:
+        0 1px 2px rgba(45, 32, 28, 0.08),
+        0 7px 18px rgba(45, 32, 28, 0.12);
 }
 
 .pinned-favicon:hover {
-    /* transform: scale(1.1); */
-    background-color: rgba(0, 0, 0, 0.1);
+    background-color: rgba(255, 255, 255, 0.92);
+    border-color: rgba(45, 32, 28, 0.14);
+    transform: translateY(-1px);
 }
 
 .pinned-favicon img {
@@ -347,7 +508,7 @@ h3 {
 }
 
 .folder {
-    margin: 8px 0;
+    margin: 0;
     /* background-color: rgba(255, 255, 255, 0.1); */
     border-radius: 8px;
     overflow: hidden;
@@ -373,9 +534,9 @@ h3 {
     margin-right: 16px;
 }
 
-.folder.collapsed:hover {
-    /* background-color: rgba(255, 255, 255, 0.2); */
+.folder.collapsed > div > .folder-header:hover {
     background: var(--collection-bg-color-dark, rgba(255, 255, 255, 0.1));
+    border-radius: 8px;
 }
 
 .folder-title {
@@ -683,7 +844,8 @@ h3 {
 }
 
 .tab {
-    margin-bottom: 4px;
+    margin-bottom: 0;
+    padding: 1px 0;
     cursor: pointer;
     position: relative;
     border-radius: 12px;
@@ -1132,7 +1294,7 @@ h3 {
 .footer-options-container .collection-options-dropdown {
     top: auto;
     right: 0;
-    bottom: calc(100% + 8px);
+    bottom: 100%;
 }
 
 .archived-tabs-popup {
@@ -1672,6 +1834,8 @@ h3 {
 /* Dark mode support */
 @media (prefers-color-scheme: dark) {
     :root {
+        --sidebar-surface: #202124;
+        --sidebar-surface-hover: #303134;
         /* In dark mode, use darker variants of user colors or fallback to dark defaults */
         --chrome-grey-color: var(--user-chrome-grey-color, #546E7A);
         --chrome-blue-color: var(--user-chrome-blue-color, #235d8b);
@@ -1827,6 +1991,23 @@ h3 {
 
     .context-menu-item.with-submenu::after {
         color: rgba(255, 255, 255, 0.6);
+    }
+
+    .pinned-favicon {
+        background-color: rgba(255, 255, 255, 0.08);
+        border-color: rgba(255, 255, 255, 0.1);
+        box-shadow: 0 5px 14px rgba(0, 0, 0, 0.2);
+    }
+
+    .pinned-favicon:hover {
+        background-color: rgba(255, 255, 255, 0.14);
+        border-color: rgba(255, 255, 255, 0.18);
+    }
+
+    .pinned-favicon.active,
+    .pinned-favicon.active:hover {
+        background-color: #eceff1;
+        border-color: rgba(255, 255, 255, 0.16);
     }
 
     .color-swatch.selected {

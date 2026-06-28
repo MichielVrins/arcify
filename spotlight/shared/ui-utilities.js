@@ -12,7 +12,7 @@
  * - Central location for all spotlight display logic and formatting
  */
 
-import { ResultType, SpotlightTabMode } from './search-types.js';
+import { ResultType } from './search-types.js';
 import { websiteNameExtractor } from './website-name-extractor.js';
 import { BASE_SCORES } from './scoring-constants.js';
 import { Utils } from '../../utils.js';
@@ -186,7 +186,7 @@ export class SpotlightUtils {
             [ResultType.OPEN_TAB]: {
                 title: result.title,
                 subtitle: result.domain,
-                action: mode === SpotlightTabMode.NEW_TAB ? 'Switch to Tab' : '↵'
+                action: 'Switch to Tab'
             },
             [ResultType.PINNED_TAB]: {
                 title: result.title,

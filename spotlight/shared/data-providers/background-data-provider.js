@@ -25,7 +25,7 @@ export class BackgroundDataProvider extends BaseDataProvider {
                 if (!tab.title || !tab.url) return false;
                 if (!query) return true;
                 return tab.title.toLowerCase().includes(query.toLowerCase()) || 
-                       tab.url.toLowerCase().includes(query.toLowerCase());
+                       this.getSearchableUrl(tab.url).includes(query.toLowerCase());
             });
             
             return filteredTabs;
@@ -55,6 +55,21 @@ export class BackgroundDataProvider extends BaseDataProvider {
             Logger.error('[BackgroundDataProvider] Error getting recent tabs:', error);
             return [];
         }
+    }
+
+    async openPinnedTab(pinnedItemId, pinnedUrl) {
+        if (!pinnedItemId || !pinnedUrl) {
+            throw new Error('Pinned tab result is missing its item ID or URL');
+        }
+        const tab = await chrome.tabs.create({ url: pinnedUrl, active: false });
+        await Utils.setPinnedTabState(tab.id, { pinnedItemId, pinnedUrl });
+        await chrome.runtime.sendMessage({
+            action: 'pinnedTabOpened',
+            tabId: tab.id,
+            pinnedItemId
+        }).catch(() => {});
+        await chrome.tabs.update(tab.id, { active: true });
+        await chrome.windows.update(tab.windowId, { focused: true });
     }
 
     async getBookmarksData(query) {
@@ -112,7 +127,7 @@ export class BackgroundDataProvider extends BaseDataProvider {
             return pinnedLinks
                 .filter(item => !normalizedQuery ||
                     item.title.toLowerCase().includes(normalizedQuery) ||
-                    item.url.toLowerCase().includes(normalizedQuery))
+                    this.getSearchableUrl(item.url).includes(normalizedQuery))
                 .map(item => {
                     const matchingTab = tabs.find(tab =>
                         !claimedTabIds.has(tab.id) &&
@@ -126,6 +141,7 @@ export class BackgroundDataProvider extends BaseDataProvider {
                     return {
                         ...item,
                         tabId: matchingTab?.id || null,
+                        windowId: matchingTab?.windowId || null,
                         isActive: Boolean(matchingTab)
                     };
                 });

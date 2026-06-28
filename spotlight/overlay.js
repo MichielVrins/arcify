@@ -14,11 +14,19 @@
  */
 
 import { SpotlightUtils } from './shared/ui-utilities.js';
-import { SelectionManager } from './shared/selection-manager.js';
 import { SpotlightMessageClient } from './shared/message-client.js';
 import { SpotlightTabMode } from './shared/search-types.js';
-import { SharedSpotlightLogic } from './shared/shared-component-logic.js';
+import {
+    getSpotlightMarkup,
+    mountSpotlightController,
+    updateSpotlightAccent
+} from './shared/spotlight-controller.js';
 import { Logger } from '../logger.js';
+
+// Reinjection after an extension reload must not invoke handlers from the old,
+// invalidated content-script context.
+document.getElementById('arcify-spotlight-dialog')?.remove();
+document.getElementById('arcify-spotlight-styles')?.remove();
 
 const pinnedNavigationGuard = window.arcifyPinnedNavigationGuard || {
     enabled: false,
@@ -126,12 +134,25 @@ function handleArcifyRuntimeMessage(message, sender, sendResponse) {
         window.arcifyCurrentTabUrl = message.tabUrl;
         window.arcifyCurrentTabId = message.tabId;
 
-        activateSpotlight(message.mode);
-        sendResponse({ success: true });
+        void activateSpotlight(message.mode)
+            .then(() => sendResponse({ success: true }))
+            .catch((error) => {
+                Logger.error('[Spotlight] Activation failed:', error);
+                sendResponse({
+                    success: false,
+                    error: error instanceof Error ? error.message : String(error)
+                });
+            });
+        return true;
     } else if (message.action === 'updatePinnedNavigationGuard') {
         setPinnedNavigationGuardState(message);
         sendResponse({ success: true });
+    } else if (message.action === 'spotlightRelayKey') {
+        if (!window.arcifySpotlightRelayKey) return false;
+        window.arcifySpotlightRelayKey(message.keyEvent);
+        sendResponse({ success: true });
     }
+    return false;
 }
 
 if (window.arcifyRuntimeMessageListener) {
@@ -154,20 +175,12 @@ async function activateSpotlight(spotlightTabMode = 'current-tab') {
     if (existingDialog) {
         if (existingDialog.open) {
             existingDialog.close();
-        } else {
-            existingDialog.showModal();
-
-            // Notify background that spotlight opened in this tab
-            SpotlightMessageClient.notifyOpened();
-
-            const input = existingDialog.querySelector('.arcify-spotlight-input');
-            if (input) {
-                input.focus();
-                input.select();
-                input.scrollLeft = 0;
-            }
+            return;
         }
-        return;
+        existingDialog.remove();
+        document.getElementById('arcify-spotlight-styles')?.remove();
+        window.arcifySpotlightInjected = false;
+        window.arcifySpotlightRelayKey = null;
     }
 
     // Mark as injected only when creating new dialog
@@ -426,205 +439,29 @@ async function activateSpotlight(spotlightTabMode = 'current-tab') {
 
     dialog.innerHTML = `
         <div class="arcify-spotlight-container">
-            <div class="arcify-spotlight-input-wrapper">
-                <svg class="arcify-spotlight-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="11" cy="11" r="8"></circle>
-                    <path d="m21 21-4.35-4.35"></path>
-                </svg>
-                <input 
-                    type="text" 
-                    class="arcify-spotlight-input" 
-                    placeholder="${spotlightTabMode === SpotlightTabMode.NEW_TAB ? 'Search or enter URL (opens in new tab)...' : 'Search or enter URL...'}"
-                    spellcheck="false"
-                    autocomplete="off"
-                    autocorrect="off"
-                    autocapitalize="off"
-                >
-            </div>
-            <div class="arcify-spotlight-results">
-                <div class="arcify-spotlight-loading">Loading...</div>
-            </div>
+            ${getSpotlightMarkup('Search or enter URL...')}
         </div>
     `;
 
     document.body.appendChild(dialog);
+    const mode = spotlightTabMode === SpotlightTabMode.NEW_TAB
+        ? SpotlightTabMode.NEW_TAB
+        : SpotlightTabMode.CURRENT_TAB;
+    const initialValue = mode === SpotlightTabMode.CURRENT_TAB
+        ? window.arcifyCurrentTabUrl || ''
+        : '';
 
-    // Get references to key elements
-    const input = dialog.querySelector('.arcify-spotlight-input');
-    const resultsContainer = dialog.querySelector('.arcify-spotlight-results');
-
-    // Initialize spotlight state
-    let currentResults = [];
-    let instantSuggestion = null; // The real-time first suggestion
-    let asyncSuggestions = []; // Debounced suggestions from background
-
-    // Send get suggestions message to background script using shared client
-    async function sendGetSuggestionsMessage(query, mode) {
-        return await SpotlightMessageClient.getSuggestions(query, mode);
-    }
-
-    // Handle result action via message passing using shared client (with tab ID optimization)
-    async function handleResultActionViaMessage(result, mode) {
-        return await SpotlightMessageClient.handleResult(result, mode);
-    }
-
-
-    const selectionManager = new SelectionManager(resultsContainer);
-
-    // Load initial results
-    async function loadInitialResults() {
-        try {
-            // Clear instant suggestion when loading initial results
-            instantSuggestion = null;
-
-            const mode = spotlightTabMode === SpotlightTabMode.NEW_TAB ? 'new-tab' : 'current-tab';
-            const results = await sendGetSuggestionsMessage('', mode);
-            asyncSuggestions = results || [];
-            updateDisplay();
-        } catch (error) {
-            Logger.error('[Spotlight] Error loading initial results:', error);
-            instantSuggestion = null;
-            asyncSuggestions = [];
-            displayEmptyState();
-        }
-    }
-
-    // Pre-fill URL in current-tab mode
-    if (spotlightTabMode === SpotlightTabMode.CURRENT_TAB && window.arcifyCurrentTabUrl) {
-        input.value = window.arcifyCurrentTabUrl;
-        setTimeout(() => {
-            handleInstantInput();
-            handleAsyncSearch();
-        }, 10);
-    } else {
-        // Initial results will be loaded asynchronously after UI appears (Phase 2 optimization)
-        displayEmptyState();
-    }
-
-    // Handle instant suggestion update (no debouncing)
-    function handleInstantInput() {
-        const query = input.value.trim();
-
-        if (!query) {
-            instantSuggestion = null;
-            loadInitialResults();
-            return;
-        }
-
-        // Generate instant suggestion based on current input
-        instantSuggestion = SpotlightUtils.generateInstantSuggestion(query);
-        updateDisplay();
-    }
-
-    // Handle async search (debounced)
-    async function handleAsyncSearch() {
-        const query = input.value.trim();
-
-        if (!query) {
-            asyncSuggestions = [];
-            updateDisplay();
-            return;
-        }
-
-        try {
-            const mode = spotlightTabMode === SpotlightTabMode.NEW_TAB ? 'new-tab' : 'current-tab';
-            const results = await sendGetSuggestionsMessage(query, mode);
-            asyncSuggestions = results || [];
-            updateDisplay();
-        } catch (error) {
-            Logger.error('[Spotlight] Search error:', error);
-            asyncSuggestions = [];
-            updateDisplay();
-        }
-    }
-
-
-    // Combine instant and async suggestions with deduplication
-    function combineResults() {
-        return SharedSpotlightLogic.combineResults(instantSuggestion, asyncSuggestions);
-    }
-
-    // Update the display with combined results
-    function updateDisplay() {
-        currentResults = combineResults();
-        selectionManager.updateResults(currentResults);
-
-        if (currentResults.length === 0) {
-            displayEmptyState();
-            return;
-        }
-
-        const mode = spotlightTabMode === SpotlightTabMode.NEW_TAB ? 'new-tab' : 'current-tab';
-        SharedSpotlightLogic.updateResultsDisplay(resultsContainer, [], currentResults, mode);
-    }
-
-
-
-    // Display empty state
-    function displayEmptyState() {
-        resultsContainer.innerHTML = '<div class="arcify-spotlight-empty">Start typing to search tabs, bookmarks, and history</div>';
-        currentResults = [];
-        instantSuggestion = null;
-        asyncSuggestions = [];
-        selectionManager.updateResults([]);
-    }
-
-
-    // Input event handlers
-    input.addEventListener('input', SharedSpotlightLogic.createInputHandler(
-        handleInstantInput,    // instant update (zero latency)
-        handleAsyncSearch,     // async update (debounced by SearchEngine)
-        150                    // debounce delay in ms
-    ));
-
-    // Handle result selection
-    async function handleResultAction(result) {
-        if (!result) {
-            Logger.error('[Spotlight] No result provided');
-            return;
-        }
-
-        try {
-            const mode = spotlightTabMode === SpotlightTabMode.NEW_TAB ? 'new-tab' : 'current-tab';
-
-            // Add immediate visual feedback - close spotlight immediately for faster perceived performance
-            closeSpotlight();
-
-            // Navigate in background
-            await handleResultActionViaMessage(result, mode);
-        } catch (error) {
-            Logger.error('[Spotlight] Error in result action:', error);
-        }
-    }
-
-    // Keyboard navigation
-    input.addEventListener('keydown', SharedSpotlightLogic.createKeyDownHandler(
-        selectionManager,                      // SelectionManager for navigation
-        (selected) => handleResultAction(selected),  // Enter handler
-        () => closeSpotlight(),               // Escape handler
-        // true                                 // container focus check enabled for overlay mode
-    ));
-
-    // Handle clicks on results
-    SharedSpotlightLogic.setupResultClickHandling(
-        resultsContainer,
-        (result, index) => handleResultAction(result), // adapter: only pass result to existing handler
-        () => currentResults // function that returns current results
-    );
-
-    // Close spotlight function
+    let closing = false;
+    let removeGlobalCloseListener = () => {};
     function closeSpotlight() {
-        dialog.close();
-
+        if (closing) return;
+        closing = true;
+        removeGlobalCloseListener();
+        if (dialog.open) dialog.close();
         SpotlightMessageClient.notifyClosed();
-
-        setTimeout(() => {
-            if (dialog.parentNode) {
-                dialog.parentNode.removeChild(dialog);
-                styleSheet.parentNode.removeChild(styleSheet);
-                window.arcifySpotlightInjected = false;
-            }
-        }, 200);
+        dialog.remove();
+        styleSheet.remove();
+        window.arcifySpotlightInjected = false;
     }
 
     // Handle backdrop clicks
@@ -637,7 +474,7 @@ async function activateSpotlight(spotlightTabMode = 'current-tab') {
     dialog.addEventListener('close', closeSpotlight);
 
     // Listen for global close messages from background script
-    SpotlightMessageClient.setupGlobalCloseListener(() => {
+    removeGlobalCloseListener = SpotlightMessageClient.setupGlobalCloseListener(() => {
         const existingDialog = document.getElementById('arcify-spotlight-dialog');
         if (existingDialog && existingDialog.open) {
             closeSpotlight();
@@ -650,68 +487,14 @@ async function activateSpotlight(spotlightTabMode = 'current-tab') {
     // Notify background that spotlight opened in this tab
     SpotlightMessageClient.notifyOpened();
 
-    // Focus input immediately (no delay needed)
-    input.focus();
-    input.select();
-    input.scrollLeft = 0;
+    const controller = mountSpotlightController({
+        root: dialog,
+        mode,
+        initialValue,
+        onBeforeAction: closeSpotlight,
+        onEscape: closeSpotlight
+    });
+    window.arcifySpotlightRelayKey = controller.relayKey;
+    void updateSpotlightAccent(styleSheet, activeSpaceColor);
 
-    /**
-     * PHASE 2: NON-BLOCKING INITIALIZATION OPTIMIZATIONS
-     * 
-     * Problem: Blocking on async operations (color fetch, initial results) delays UI appearance
-     * 
-     * Solution: Show UI immediately, then update asynchronously in background
-     * - UI appears instantly with default purple color
-     * - Real collection color loads and smoothly transitions via CSS
-     * - Initial results load progressively after UI is visible
-     * 
-     * Benefits: Additional 20-50ms improvement in perceived performance
-     */
-
-    // Async Phase 2 improvements: Update color and load initial results non-blocking
-    (async () => {
-        try {
-            // Update active collection color asynchronously (non-blocking)
-            const realActiveSpaceColor = await SpotlightMessageClient.getActiveCollectionColor();
-            if (realActiveSpaceColor !== activeSpaceColor) {
-                // Update CSS variables for smooth color transition
-                const newColorDefinitions = await SpotlightUtils.getAccentColorCSS(realActiveSpaceColor);
-                const styleElement = document.querySelector('#arcify-spotlight-styles');
-                if (styleElement) {
-                    // Extract just the color definitions and update them
-                    const colorRegex = /:root\s*{([^}]*)}/;
-                    const currentCSS = styleElement.textContent;
-                    const newColorMatch = newColorDefinitions.match(colorRegex);
-                    if (newColorMatch) {
-                        const updatedCSS = currentCSS.replace(colorRegex, newColorMatch[0]);
-                        styleElement.textContent = updatedCSS;
-                    }
-                }
-            }
-        } catch (error) {
-            Logger.error('[Spotlight] Error updating active collection color:', error);
-        }
-
-        // Load initial results after color update (if input is still empty)
-        if (!input.value.trim()) {
-            loadInitialResults();
-        }
-    })();
-
-}
-
-/**
- * LEGACY INJECTION COMPATIBILITY
- * 
- * Why this is needed: The old injection method sets window.arcifySpotlightTabMode before
- * loading this script. If that variable exists, we know we were injected the old way
- * and should activate immediately (not wait for a message).
- * 
- * This ensures backward compatibility and provides a fallback when the dormant
- * content script fails (e.g., on chrome:// URLs where content scripts don't run).
- */
-
-// If activated by background script injection (legacy mode), run immediately
-if (window.arcifySpotlightTabMode) {
-    activateSpotlight(window.arcifySpotlightTabMode);
 }

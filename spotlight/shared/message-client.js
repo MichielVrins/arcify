@@ -4,6 +4,17 @@
 import { Logger } from '../../logger.js';
 
 export class SpotlightMessageClient {
+    static sendWithoutResponse(message, errorContext) {
+        try {
+            const pending = chrome.runtime.sendMessage(message);
+            pending?.catch((error) => {
+                Logger.error(errorContext, error);
+            });
+        } catch (error) {
+            Logger.error(errorContext, error);
+        }
+    }
+
     // Get suggestions from background script
     static async getSuggestions(query, mode) {
         try {
@@ -72,20 +83,18 @@ export class SpotlightMessageClient {
 
     // Notify background that spotlight opened
     static notifyOpened() {
-        try {
-            chrome.runtime.sendMessage({ action: 'spotlightOpened' });
-        } catch (error) {
-            Logger.error('[SpotlightMessageClient] Error notifying spotlight opened:', error);
-        }
+        this.sendWithoutResponse(
+            { action: 'spotlightOpened' },
+            '[SpotlightMessageClient] Error notifying spotlight opened:'
+        );
     }
 
     // Notify background that spotlight closed
     static notifyClosed() {
-        try {
-            chrome.runtime.sendMessage({ action: 'spotlightClosed' });
-        } catch (error) {
-            Logger.error('[SpotlightMessageClient] Error notifying spotlight closed:', error);
-        }
+        this.sendWithoutResponse(
+            { action: 'spotlightClosed' },
+            '[SpotlightMessageClient] Error notifying spotlight closed:'
+        );
     }
 
     // Switch to tab (new-tab mode)

@@ -23,8 +23,6 @@ export class SearchEngine {
         }
         this.dataProvider = dataProvider;
         this.cache = new Map();
-        this.suggestionsTimeout = null;
-        this.DEBOUNCE_DELAY = 150;
         this.CACHE_TTL = 30000;
 
         // Detect if we're running in background script context
@@ -34,36 +32,25 @@ export class SearchEngine {
                                    this.dataProvider.constructor.name === 'BackgroundDataProvider';
     }
 
-    // Main method to get spotlight suggestions with debouncing and caching
-    getSpotlightSuggestionsUsingCache(query, mode = SpotlightTabMode.CURRENT_TAB) {
-        return new Promise((resolve) => {
-            clearTimeout(this.suggestionsTimeout);
+    // Main method to get spotlight suggestions with caching
+    async getSpotlightSuggestionsUsingCache(query, mode = SpotlightTabMode.CURRENT_TAB) {
+        const cacheKey = `${query.trim()}:${mode}`;
+        const cached = this.cache.get(cacheKey);
+        if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+            return cached.results;
+        }
 
-            // Check cache first
-            const cacheKey = `${query.trim()}:${mode}`;
-            const cached = this.cache.get(cacheKey);
-            if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
-                resolve(cached.results);
-                return;
-            }
-
-            // Debounced suggestions
-            this.suggestionsTimeout = setTimeout(async () => {
-                try {
-                    const results = await this.getSuggestionsImpl(query, mode);
-
-                    this.cache.set(cacheKey, {
-                        results,
-                        timestamp: Date.now()
-                    });
-
-                    resolve(results);
-                } catch (error) {
-                    Logger.error('Search error:', error);
-                    resolve([]);
-                }
-            }, this.DEBOUNCE_DELAY);
-        });
+        try {
+            const results = await this.getSuggestionsImpl(query, mode);
+            this.cache.set(cacheKey, {
+                results,
+                timestamp: Date.now()
+            });
+            return results;
+        } catch (error) {
+            Logger.error('Search error:', error);
+            return [];
+        }
     }
 
     // Immediate suggestions without debouncing
@@ -93,67 +80,43 @@ export class SearchEngine {
         try {
             switch (result.type) {
                 case ResultType.OPEN_TAB:
-                    if (mode === SpotlightTabMode.NEW_TAB) {
-                        if (!result.metadata?.tabId) {
-                            throw new Error('OPEN_TAB result missing tabId in metadata');
-                        }
+                    if (!result.metadata?.tabId) {
+                        throw new Error('OPEN_TAB result missing tabId in metadata');
+                    }
 
-                        if (this.isBackgroundContext) {
-                            await chrome.tabs.update(result.metadata.tabId, { active: true });
-                            if (result.metadata.windowId) {
-                                await chrome.windows.update(result.metadata.windowId, { focused: true });
-                            }
-                        } else {
-                            const response = await chrome.runtime.sendMessage({
-                                action: 'switchToTab',
-                                tabId: result.metadata.tabId,
-                                windowId: result.metadata.windowId
-                            });
-                            if (!response?.success) {
-                                throw new Error('Failed to switch tab');
-                            }
+                    if (this.isBackgroundContext) {
+                        await chrome.tabs.update(result.metadata.tabId, { active: true });
+                        if (result.metadata.windowId) {
+                            await chrome.windows.update(result.metadata.windowId, { focused: true });
                         }
                     } else {
-                        if (!result.url) {
-                            throw new Error('OPEN_TAB result missing URL for current tab navigation');
-                        }
-
-                        if (this.isBackgroundContext) {
-                            if (currentTabId) {
-                                // Use provided tab ID for faster navigation
-                                await chrome.tabs.update(currentTabId, { url: result.url });
-                            } else {
-                                // Fallback to query
-                                const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-                                if (activeTab) {
-                                    await chrome.tabs.update(activeTab.id, { url: result.url });
-                                } else {
-                                    throw new Error('No active tab found');
-                                }
-                            }
-                        } else {
-                            const response = await chrome.runtime.sendMessage({
-                                action: 'navigateCurrentTab',
-                                url: result.url
-                            });
-                            if (!response?.success) {
-                                throw new Error('Failed to navigate current tab');
-                            }
+                        const response = await chrome.runtime.sendMessage({
+                            action: 'switchToTab',
+                            tabId: result.metadata.tabId,
+                            windowId: result.metadata.windowId
+                        });
+                        if (!response?.success) {
+                            throw new Error('Failed to switch tab');
                         }
                     }
                     break;
 
                 case ResultType.PINNED_TAB:
-                    Logger.log('[SearchEngine] Handling PINNED_TAB result:', result);
+                    if (result.metadata?.isActive && result.metadata?.tabId) {
+                        await chrome.tabs.update(result.metadata.tabId, { active: true });
+                        if (result.metadata.windowId) {
+                            await chrome.windows.update(
+                                result.metadata.windowId,
+                                { focused: true }
+                            );
+                        }
+                        break;
+                    }
 
-                    const pinnedTabMessage = {
-                        action: 'activatePinnedTab',
-                        pinnedItemId: result.metadata?.pinnedItemId,
-                        pinnedUrl: result.url,
-                        mode: mode
-                    };
-                    Logger.log('[SearchEngine] Sending activatePinnedTab message:', pinnedTabMessage);
-                    await chrome.runtime.sendMessage(pinnedTabMessage);
+                    await this.dataProvider.openPinnedTab(
+                        result.metadata?.pinnedItemId,
+                        result.url
+                    );
                     break;
 
                 case ResultType.URL_SUGGESTION:
