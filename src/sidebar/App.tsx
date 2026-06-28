@@ -9,7 +9,7 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
-import { useState, type CSSProperties } from 'react';
+import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import {
   ContextMenu,
   FavoritesBar,
@@ -43,7 +43,7 @@ export interface SidebarAppProps {
   archiveOpen: boolean;
   tabActions: TabActions;
   treeActions: PinnedTreeActions;
-  onDragEnd(active: DragItem, target: DropTarget): void;
+  onDragEnd(active: DragItem, target: DropTarget): void | Promise<void>;
   onCleanAll(): void;
   onNewTab(): void;
   onMenuClose(): void;
@@ -64,9 +64,43 @@ export interface SidebarAppProps {
 
 export function SidebarApp(props: SidebarAppProps) {
   const [activeDrag, setActiveDrag] = useState<DragItem | null>(null);
+  const layoutPositions = useRef(new Map<string, DOMRect>());
+  const animateNextLayout = useRef(false);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   );
+
+  useLayoutEffect(() => {
+    const elements = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-layout-key]'),
+    );
+    const nextPositions = new Map<string, DOMRect>();
+    let moved = false;
+    for (const element of elements) {
+      const key = element.dataset.layoutKey;
+      if (!key) continue;
+      const next = element.getBoundingClientRect();
+      nextPositions.set(key, next);
+      const previous = layoutPositions.current.get(key);
+      if (!animateNextLayout.current || !previous) continue;
+      const x = previous.left - next.left;
+      const y = previous.top - next.top;
+      if (Math.abs(x) < 0.5 && Math.abs(y) < 0.5) continue;
+      moved = true;
+      element.animate(
+        [
+          { transform: `translate(${x}px, ${y}px)` },
+          { transform: 'translate(0, 0)' },
+        ],
+        {
+          duration: 180,
+          easing: 'cubic-bezier(0.2, 0.75, 0.25, 1)',
+        },
+      );
+    }
+    layoutPositions.current = nextPositions;
+    if (moved) animateNextLayout.current = false;
+  });
 
   if (props.status === 'loading') {
     return <div className="sidebar-loading">Loading Arcify…</div>;
@@ -87,10 +121,13 @@ export function SidebarApp(props: SidebarAppProps) {
     '--collection-bg-color-dark': 'var(--sidebar-surface-hover)',
   } as CSSProperties;
 
-  const handleDragEnd = (event: DragEndEvent) => {
+  const handleDragEnd = async (event: DragEndEvent) => {
     const active = event.active.data.current as DragItem | undefined;
     const target = event.over?.data.current as DropTarget | undefined;
-    if (active && target) props.onDragEnd(active, target);
+    if (active && target) {
+      animateNextLayout.current = true;
+      await props.onDragEnd(active, target);
+    }
     setActiveDrag(null);
   };
 

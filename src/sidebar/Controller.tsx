@@ -368,7 +368,10 @@ export function SidebarController() {
       if (target.area === 'temporary') {
         const targetRow = temporaryRows[target.index];
         const targetTab = targetRow?.tabId ? tabById[targetRow.tabId] : null;
-        await moveNativeTab(tab.id, targetTab?.index ?? -1);
+        const targetIndex = targetTab
+          ? targetTab.index - (tab.index < targetTab.index ? 1 : 0)
+          : -1;
+        await moveNativeTab(tab.id, targetIndex);
         return;
       }
       const placement = target.area === 'favorite' ? 'favorite' : 'sidebar';
@@ -543,7 +546,7 @@ export function SidebarController() {
       archiveOpen={archiveOpen}
       tabActions={tabActions}
       treeActions={treeActions}
-      onDragEnd={(active, target) => void handleDragEnd(active, target)}
+      onDragEnd={handleDragEnd}
       onCleanAll={() => void closeTemporaryRows(temporaryRows)}
       onNewTab={() => void sendRuntimeMessage({ command: 'toggleSpotlightNewTab' })}
       onMenuClose={() => setMenu(null)}

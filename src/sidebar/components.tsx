@@ -161,16 +161,23 @@ interface DraggableProps {
   dragItem: DragItem;
   children: ReactNode;
   className?: string;
+  layoutKey?: string;
 }
 
-function Draggable({ id, dragItem, children, className = '' }: DraggableProps) {
+function Draggable({
+  id,
+  dragItem,
+  children,
+  className = '',
+  layoutKey,
+}: DraggableProps) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id,
     data: dragItem,
   });
   const style: CSSProperties = {
     transform: isDragging ? undefined : CSS.Translate.toString(transform),
-    opacity: isDragging ? 0.2 : undefined,
+    opacity: isDragging ? 0.72 : undefined,
     position: 'relative',
     zIndex: isDragging ? 20 : undefined,
   };
@@ -179,6 +186,7 @@ function Draggable({ id, dragItem, children, className = '' }: DraggableProps) {
       ref={setNodeRef}
       style={style}
       className={className}
+      data-layout-key={layoutKey}
       {...listeners}
       {...attributes}
       tabIndex={undefined}
@@ -209,6 +217,7 @@ export function TabRow({ row, dragItem, actions }: TabRowProps) {
       id={`tab:${row.key}`}
       dragItem={dragItem}
       className={`react-tab-row ${actions.closingKeys.has(row.key) ? 'closing' : ''}`}
+      layoutKey={`tab:${row.key}`}
     >
       <div
         ref={rowRef}
@@ -275,6 +284,7 @@ export function FavoritesBar({ favorites, actions }: FavoritesBarProps) {
             id={`favorite:${item.id}`}
             dragItem={{ kind: 'pinned', itemId: item.id }}
             className="react-favorite-drag"
+            layoutKey={`tab:${item.id}`}
           >
             {actions.renamingKey === `item:${item.id}` ? (
               <InlineRename
@@ -445,6 +455,7 @@ export function FolderNode({
       <Draggable
         id={`folder:${folder.id}`}
         dragItem={{ kind: 'pinned', itemId: folder.id }}
+        layoutKey={`folder:${folder.id}`}
       >
         <FolderHeader
           folder={folder}

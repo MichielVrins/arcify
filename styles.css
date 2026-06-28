@@ -95,9 +95,13 @@ body,
     text-overflow: ellipsis;
 }
 
+.drag-overlay-preview.tab {
+    padding: 10px 12px;
+}
+
 .react-drop-zone {
-    height: 6px;
-    margin: -3px 8px;
+    height: 40px;
+    margin: -20px 8px;
     pointer-events: none;
     position: relative;
     z-index: 5;
@@ -111,7 +115,7 @@ body,
     left: 0;
     position: absolute;
     right: 0;
-    top: 2px;
+    top: 19px;
 }
 
 .react-drop-zone-horizontal {
