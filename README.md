@@ -4,14 +4,21 @@
 
 A Chrome extension that replicates Arc browser's tab management system, providing a vertical sidebar for efficient tab organization and management.
 
+This is a fork of the original https://github.com/nisargkolhe/arcify extension. The ui is still similar, but almost the whole sidebar is redone. 
+Notable changes:
+- Not using bookmarks as a datastore and instead use the extensions built-in JSON datastore. This fixes alot of weird behaviors
+- Removed spaces
+- Removed grouping of tabs
+- Color matching with the browser
+- Pinned tabs now stay on their original website and create a new temporary tab when trying to navigate away
+
+
 ![Demo](assets/extension.gif)
 
 ## Features
 
 - Vertical tab management
-- Tab grouping functionality
 - Keyboard shortcuts for quick access
-- Bookmark integration
 - Clean, minimal interface
 
 ## Development Setup
@@ -19,7 +26,7 @@ A Chrome extension that replicates Arc browser's tab management system, providin
 ### Prerequisites
 
 - Node.js (v16 or higher)
-- npm or yarn
+- pnpm
 - Google Chrome or Chromium-based browser
 - Git (for version control)
 - Basic knowledge of HTML, CSS, and JavaScript
@@ -30,24 +37,24 @@ A Chrome extension that replicates Arc browser's tab management system, providin
    ```bash
    git clone https://github.com/nisargkolhe/arcify.git
    cd arcify
-   npm install
+   pnpm install
    ```
 
 2. **Development Build**
    ```bash
-   npm run dev
+   pnpm run dev
    ```
    This creates a `dist-dev/` folder with source maps for debugging and watches for file changes.
 
 3. **Production Build**
    ```bash
-   npm run build
+   pnpm run build
    ```
    This creates an optimized `dist/` folder ready for distribution.
 
 4. **Create Distribution Package**
    ```bash
-   npm run build:zip
+   pnpm run build:zip
    ```
    This builds the extension and creates `arcify-extension.zip` for Chrome Web Store submission.
 
@@ -84,14 +91,14 @@ A Chrome extension that replicates Arc browser's tab management system, providin
 
 ### Build Scripts
 
-- `npm run dev` - Development build with file watching
-- `npm run build` - Production build
-- `npm run build:zip` - Build and create zip package
-- `npm run zip` - Create zip from existing build
-- `npm run clean` - Remove all build artifacts
-- `npm run preview` - Preview the built extension
-- `npm run info` - Display build information and status
-- `npm run release <type>` - Create a new release (patch/minor/major/x.y.z)
+- `pnpm run dev` - Development build with file watching
+- `pnpm run build` - Production build
+- `pnpm run build:zip` - Build and create zip package
+- `pnpm run zip` - Create zip from existing build
+- `pnpm run clean` - Remove all build artifacts
+- `pnpm run preview` - Preview the built extension
+- `pnpm run info` - Display build information and status
+- `pnpm run release <type>` - Create a new release (patch/minor/major/x.y.z)
 
 ### Release Process
 
@@ -106,16 +113,16 @@ The project uses automated releases via GitHub Actions. To create a new release:
 2. **Create a release**
    ```bash
    # For bug fixes (2.2.0 → 2.2.1)
-   npm run release patch
+   pnpm run release patch
    
    # For new features (2.2.0 → 2.3.0)
-   npm run release minor
+   pnpm run release minor
    
    # For breaking changes (2.2.0 → 3.0.0)
-   npm run release major
+   pnpm run release major
    
    # For specific version
-   npm run release 2.5.0
+   pnpm run release 2.5.0
    ```
 
 3. **Automated process**
