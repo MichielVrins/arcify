@@ -37,7 +37,6 @@ export type SidebarAction =
     }
   | { type: 'initializationFailed'; error: string }
   | { type: 'toggleFolder'; folderId: string }
-  | { type: 'setColor'; color: string }
   | { type: 'replaceDurable'; durable: DurableSidebarState }
   | {
       type: 'movePinnedItem';
@@ -107,11 +106,6 @@ function reducer(state: SidebarState, action: SidebarAction): SidebarState {
         runtime: { ...state.runtime, expandedFolderIds: [...expanded] },
       };
     }
-    case 'setColor':
-      return {
-        ...state,
-        durable: { ...state.durable, color: action.color },
-      };
     case 'replaceDurable':
       return { ...state, durable: action.durable };
     case 'movePinnedItem':

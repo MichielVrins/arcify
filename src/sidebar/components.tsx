@@ -643,10 +643,8 @@ export function ContextMenu({
 }
 
 interface SidebarFooterProps {
-  color: string;
   archiveOpen: boolean;
   archivedTabs: ArchivedTab[];
-  onColorChange(color: string): void;
   onToggleArchive(): void;
   onRestore(tab: ArchivedTab): void;
   onNewFolder(): void;
@@ -654,10 +652,8 @@ interface SidebarFooterProps {
 }
 
 export function SidebarFooter({
-  color,
   archiveOpen,
   archivedTabs,
-  onColorChange,
   onToggleArchive,
   onRestore,
   onNewFolder,
@@ -683,11 +679,6 @@ export function SidebarFooter({
       <div className="sidebar-options-container collection-options-container footer-options-container">
         <button className="collection-options footer-options-toggle" title="Options">•••</button>
         <div className="sidebar-options-dropdown collection-options-dropdown">
-          <select value={color} onChange={event => onColorChange(event.target.value)}>
-            {['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan'].map(value => (
-              <option key={value} value={value}>{value}</option>
-            ))}
-          </select>
           <button onClick={onToggleArchive}>Archived Tabs</button>
           <button onClick={onNewFolder}>New Folder</button>
           <div className="options-separator" />

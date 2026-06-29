@@ -9,8 +9,7 @@
 import { SpotlightUtils } from './shared/ui-utilities.js';
 import {
     getSpotlightMarkup,
-    mountSpotlightController,
-    updateSpotlightAccent
+    mountSpotlightController
 } from './shared/spotlight-controller.js';
 import { Logger } from '../logger.js';
 
@@ -44,11 +43,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 async function initializeSpotlight() {
     const container = document.getElementById('spotlight-container');
 
-    // Start with default color - will update asynchronously
-    let activeSpaceColor = 'purple';
-
-    // CSS styles with default accent color
-    const accentColorDefinitions = await SpotlightUtils.getAccentColorCSS(activeSpaceColor);
+    const accentColorDefinitions = SpotlightUtils.getAccentColorCSS();
     const spotlightCSS = `
         ${accentColorDefinitions}
         
@@ -243,5 +238,4 @@ async function initializeSpotlight() {
             controller.focus();
         }
     });
-    void updateSpotlightAccent(styleSheet, activeSpaceColor);
 }

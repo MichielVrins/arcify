@@ -70,9 +70,30 @@ export function SidebarController() {
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [archivedTabs, setArchivedTabs] = useState<ArchivedTab[]>([]);
   const [closingKeys, setClosingKeys] = useState<string[]>([]);
+  const [surfaceColor, setSurfaceColor] = useState<string | null>(null);
   const refreshSequence = useRef(0);
   const liveOwnership = useRef<Record<number, string>>({});
   const spotlightRelayTabId = useRef<number | null>(null);
+
+  useEffect(() => {
+    void chrome.storage.sync.get('sidebarSurfaceColor').then(result => {
+      setSurfaceColor(
+        typeof result.sidebarSurfaceColor === 'string'
+          ? result.sidebarSurfaceColor
+          : null,
+      );
+    });
+    const onChanged = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      areaName: string,
+    ) => {
+      if (areaName !== 'sync' || !changes.sidebarSurfaceColor) return;
+      const value = changes.sidebarSurfaceColor.newValue;
+      setSurfaceColor(typeof value === 'string' ? value : null);
+    };
+    chrome.storage.onChanged.addListener(onChanged);
+    return () => chrome.storage.onChanged.removeListener(onChanged);
+  }, []);
 
   const rememberOwnership = (tabId: number, itemId: string | null) => {
     if (itemId) liveOwnership.current[tabId] = itemId;
@@ -536,7 +557,7 @@ export function SidebarController() {
     <SidebarApp
       status={state.status}
       error={state.error}
-      color={state.durable.color}
+      surfaceColor={surfaceColor}
       pinnedItems={state.durable.pinnedItems}
       rowByItemId={rowByItemId}
       temporaryRows={temporaryRows}
@@ -570,7 +591,6 @@ export function SidebarController() {
           });
         }
       }}
-      onColorChange={color => dispatch({ type: 'setColor', color })}
       onToggleArchive={() => setArchiveOpen(value => !value)}
       onRestoreArchive={tab =>
         void (async () => {

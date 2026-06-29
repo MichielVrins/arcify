@@ -15,24 +15,7 @@
 import { Utils } from './utils.js';
 import { Logger } from './logger.js';
 
-// Default color values (must be 6-digit hex for color picker compatibility)
-const DEFAULT_COLORS = {
-  grey: '#cccccc',
-  blue: '#8bb3f3',
-  red: '#ff9e97',
-  yellow: '#ffe29f',
-  green: '#8bda99',
-  pink: '#fbaad7',
-  purple: '#d6a6ff',
-  cyan: '#a5e2ea'
-};
-
-const COLOR_NAMES = Object.keys(DEFAULT_COLORS);
-
-// Helper to get color picker element ID from color name
-function getColorPickerId(colorName) {
-  return `color${colorName.charAt(0).toUpperCase() + colorName.slice(1)}`;
-}
+const DEFAULT_SIDEBAR_SURFACE_COLOR = '#fff8f6';
 
 // Helper to safely get checkbox value with default
 function getCheckboxValue(element, defaultValue) {
@@ -66,40 +49,18 @@ function updateAutoArchiveIdleMinutesVisibility(forceEnabled) {
   input.disabled = !isEnabled;
 }
 
-// Function to apply color overrides to CSS variables
-function applyColorOverrides(colorOverrides) {
-  if (!colorOverrides) return;
-
-  const root = document.documentElement;
-  Object.keys(colorOverrides).forEach(colorName => {
-    const colorValue = colorOverrides[colorName];
-    if (colorValue) {
-      root.style.setProperty(`--user-chrome-${colorName}-color`, colorValue);
-    } else {
-      root.style.removeProperty(`--user-chrome-${colorName}-color`);
-    }
-  });
-}
-
 // Function to save options to chrome.storage
 async function saveOptions() {
   const autoArchiveIdleMinutesInput = document.getElementById('autoArchiveIdleMinutes');
-
-  // Collect color overrides (only non-default values)
-  const colorOverrides = {};
-  COLOR_NAMES.forEach(colorName => {
-    const colorPicker = document.getElementById(getColorPickerId(colorName));
-    if (colorPicker && colorPicker.value !== DEFAULT_COLORS[colorName]) {
-      colorOverrides[colorName] = colorPicker.value;
-    }
-  });
 
   const settings = {
     autoArchiveEnabled: getCheckboxValue(document.getElementById('autoArchiveEnabled'), false),
     autoArchiveIdleMinutes: parseInt(autoArchiveIdleMinutesInput?.value, 10) || 360,
     enableSpotlight: getCheckboxValue(document.getElementById('enableSpotlight'), true),
     showAllOpenTabsInCollapsedFolders: getCheckboxValue(document.getElementById('showAllOpenTabsInCollapsedFolders'), false),
-    colorOverrides: Object.keys(colorOverrides).length > 0 ? colorOverrides : null,
+    sidebarSurfaceColor:
+      document.getElementById('sidebarSurfaceColor')?.value ||
+      DEFAULT_SIDEBAR_SURFACE_COLOR,
     debugLoggingEnabled: getCheckboxValue(document.getElementById('debugLoggingEnabled'), false)
   };
 
@@ -107,7 +68,6 @@ async function saveOptions() {
     await chrome.storage.sync.set(settings);
     Logger.log('Settings saved:', settings);
 
-    applyColorOverrides(settings.colorOverrides);
     await chrome.runtime.sendMessage({ action: 'updateAutoArchiveSettings' });
     showToast();
   } catch (error) {
@@ -146,16 +106,11 @@ async function restoreOptions() {
   }
   updateAutoArchiveIdleMinutesVisibility(settings.autoArchiveEnabled);
 
-  // Restore color overrides
-  const colorOverrides = settings.colorOverrides || {};
-  COLOR_NAMES.forEach(colorName => {
-    const colorPicker = document.getElementById(getColorPickerId(colorName));
-    if (colorPicker) {
-      colorPicker.value = colorOverrides[colorName] || DEFAULT_COLORS[colorName];
-    }
-  });
-
-  applyColorOverrides(colorOverrides);
+  const sidebarSurfaceColor = document.getElementById('sidebarSurfaceColor');
+  if (sidebarSurfaceColor) {
+    sidebarSurfaceColor.value =
+      settings.sidebarSurfaceColor || DEFAULT_SIDEBAR_SURFACE_COLOR;
+  }
 }
 
 // Function to setup advanced options toggle
@@ -171,16 +126,10 @@ function setupAdvancedOptions() {
     });
   }
 
-  // Setup color reset buttons
-  document.querySelectorAll('.color-reset-btn').forEach(button => {
-    button.addEventListener('click', () => {
-      const colorName = button.dataset.color;
-      const colorPicker = document.getElementById(getColorPickerId(colorName));
-      if (colorPicker && DEFAULT_COLORS[colorName]) {
-        colorPicker.value = DEFAULT_COLORS[colorName];
-        saveOptions();
-      }
-    });
+  document.getElementById('resetSidebarSurfaceColor')?.addEventListener('click', () => {
+    const picker = document.getElementById('sidebarSurfaceColor');
+    if (picker) picker.value = DEFAULT_SIDEBAR_SURFACE_COLOR;
+    saveOptions();
   });
 }
 
@@ -208,10 +157,7 @@ function setupAutoSave() {
   // Auto-save for number input (with debounce)
   addListenerIfExists('autoArchiveIdleMinutes', 'input', debouncedSave);
 
-  // Auto-save for color pickers (with debounce)
-  COLOR_NAMES.forEach(colorName => {
-    addListenerIfExists(getColorPickerId(colorName), 'input', debouncedSave);
-  });
+  addListenerIfExists('sidebarSurfaceColor', 'input', debouncedSave);
 }
 
 document.addEventListener('DOMContentLoaded', () => {

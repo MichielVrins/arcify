@@ -1035,12 +1035,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return { pinnedTabs };
         }, sendResponse, 'getting pinned tabs', { pinnedTabs: [] });
 
-    } else if (message.action === 'getActiveCollectionColor') {
-        return handleAsyncMessage(async () => {
-            const sidebarState = await Utils.getSidebarState();
-            return { color: sidebarState?.color || 'purple' };
-        }, sendResponse, 'getting active sidebar color', { color: 'purple' });
-
     } else if (message.action === 'performSearch') {
         return handleAsyncMessage(async () => {
             const disposition = message.mode === SpotlightTabMode.NEW_TAB ? 'NEW_TAB' : 'CURRENT_TAB';

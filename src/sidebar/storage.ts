@@ -3,8 +3,6 @@ import type { ArchivedTab, DurableSidebarState, PinnedItem } from './types';
 const SIDEBAR_KEY = 'sidebarState';
 const ARCHIVE_KEY = 'archivedTabs';
 
-const COLORS = ['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan'];
-
 function normalizeItem(raw: unknown): PinnedItem | null {
   if (!raw || typeof raw !== 'object') return null;
   const item = raw as Record<string, unknown>;
@@ -32,7 +30,7 @@ function normalizeItem(raw: unknown): PinnedItem | null {
 }
 
 export function defaultDurableState(): DurableSidebarState {
-  return { version: 2, color: 'grey', pinnedItems: [] };
+  return { version: 2, pinnedItems: [] };
 }
 
 export async function loadDurableState(): Promise<DurableSidebarState> {
@@ -41,8 +39,6 @@ export async function loadDurableState(): Promise<DurableSidebarState> {
   if (!raw) return defaultDurableState();
   return {
     version: 2,
-    color:
-      typeof raw.color === 'string' && COLORS.includes(raw.color) ? raw.color : 'grey',
     pinnedItems: Array.isArray(raw.pinnedItems)
       ? raw.pinnedItems.map(normalizeItem).filter((item): item is PinnedItem => Boolean(item))
       : [],

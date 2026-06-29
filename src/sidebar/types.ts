@@ -20,7 +20,6 @@ export type PinnedItem = PinnedLink | PinnedFolder;
 
 export interface DurableSidebarState {
   version: 2;
-  color: string;
   pinnedItems: PinnedItem[];
 }
 

@@ -18,8 +18,7 @@ import { SpotlightMessageClient } from './shared/message-client.js';
 import { SpotlightTabMode } from './shared/search-types.js';
 import {
     getSpotlightMarkup,
-    mountSpotlightController,
-    updateSpotlightAccent
+    mountSpotlightController
 } from './shared/spotlight-controller.js';
 import { Logger } from '../logger.js';
 
@@ -186,11 +185,7 @@ async function activateSpotlight(spotlightTabMode = 'current-tab') {
     // Mark as injected only when creating new dialog
     window.arcifySpotlightInjected = true;
 
-    // Start with default color - will update asynchronously
-    let activeSpaceColor = 'purple'; // Default fallback
-
-    // CSS styles with default accent color (will be updated)
-    const accentColorDefinitions = await SpotlightUtils.getAccentColorCSS(activeSpaceColor);
+    const accentColorDefinitions = SpotlightUtils.getAccentColorCSS();
     const spotlightCSS = `
         ${accentColorDefinitions}
         
@@ -495,6 +490,4 @@ async function activateSpotlight(spotlightTabMode = 'current-tab') {
         onEscape: closeSpotlight
     });
     window.arcifySpotlightRelayKey = controller.relayKey;
-    void updateSpotlightAccent(styleSheet, activeSpaceColor);
-
 }

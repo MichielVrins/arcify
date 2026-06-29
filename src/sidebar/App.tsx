@@ -34,7 +34,7 @@ import type {
 export interface SidebarAppProps {
   status: 'loading' | 'ready' | 'error';
   error: string | null;
-  color: string;
+  surfaceColor: string | null;
   pinnedItems: PinnedItem[];
   rowByItemId: Record<string, TabRowViewModel>;
   temporaryRows: TabRowViewModel[];
@@ -56,7 +56,6 @@ export interface SidebarAppProps {
   onMenuReplaceUrl(): void;
   onMenuNewFolder(): void;
   onMenuDeleteFolder(): void;
-  onColorChange(color: string): void;
   onToggleArchive(): void;
   onRestoreArchive(tab: ArchivedTab): void;
   onNewFolder(): void;
@@ -119,8 +118,10 @@ export function SidebarApp(props: SidebarAppProps) {
     );
   const pinned = sidebarItems(props.pinnedItems);
   const style = {
-    '--collection-bg-color': 'var(--sidebar-surface)',
-    '--collection-bg-color-dark': 'var(--sidebar-surface-hover)',
+    '--collection-bg-color': props.surfaceColor || 'var(--sidebar-surface)',
+    '--collection-bg-color-dark': props.surfaceColor
+      ? `color-mix(in srgb, ${props.surfaceColor} 92%, black)`
+      : 'var(--sidebar-surface-hover)',
   } as CSSProperties;
 
   const handleDragEnd = async (event: DragEndEvent) => {
@@ -226,10 +227,8 @@ export function SidebarApp(props: SidebarAppProps) {
               />
             </div>
             <SidebarFooter
-              color={props.color}
               archiveOpen={props.archiveOpen}
               archivedTabs={props.archivedTabs}
-              onColorChange={props.onColorChange}
               onToggleArchive={props.onToggleArchive}
               onRestore={props.onRestoreArchive}
               onNewFolder={props.onNewFolder}

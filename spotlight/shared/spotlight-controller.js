@@ -43,24 +43,6 @@ export function focusSpotlightInput(input) {
     setTimeout(focus, 50);
 }
 
-export async function updateSpotlightAccent(styleElement, initialColor) {
-    try {
-        const color = await SpotlightMessageClient.getActiveCollectionColor();
-        if (!styleElement || color === initialColor) return;
-        const definitions = await SpotlightUtils.getAccentColorCSS(color);
-        const rootPattern = /:root\s*{([^}]*)}/;
-        const match = definitions.match(rootPattern);
-        if (match) {
-            styleElement.textContent = styleElement.textContent.replace(
-                rootPattern,
-                match[0],
-            );
-        }
-    } catch (error) {
-        Logger.error('[Spotlight] Error updating accent color:', error);
-    }
-}
-
 export function mountSpotlightController({
     root,
     mode,

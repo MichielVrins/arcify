@@ -7,6 +7,7 @@
 html,
 body,
 #root {
+    background: transparent;
     height: 100%;
 }
 
@@ -147,31 +148,15 @@ body,
 }
 
 :root {
-    --sidebar-surface: #fff8f6;
-    --sidebar-surface-hover: #f1e7e4;
+    --sidebar-surface: transparent;
+    --sidebar-surface-hover: rgba(0, 0, 0, 0.06);
 
-    /* User color overrides (set via JavaScript, fallback to defaults) */
-    --chrome-grey-color: var(--user-chrome-grey-color, #cccccc);
-    --chrome-blue-color: var(--user-chrome-blue-color, #8bb3f3);
-    --chrome-red-color: var(--user-chrome-red-color, #ff9e97);
-    --chrome-yellow-color: var(--user-chrome-yellow-color, #ffe29f);
-    --chrome-green-color: var(--user-chrome-green-color, #8bda99);
-    --chrome-pink-color: var(--user-chrome-pink-color, #fbaad7);
-    --chrome-purple-color: var(--user-chrome-purple-color, #d6a6ff);
-    --chrome-cyan-color: var(--user-chrome-cyan-color, #a5e2ea);
-
-    /* Dark variants - auto-generated from base colors using color-mix */
-    --chrome-grey-color-dark: color-mix(in srgb, var(--chrome-grey-color) 85%, black);
-    --chrome-blue-color-dark: color-mix(in srgb, var(--chrome-blue-color) 75%, black);
-    --chrome-red-color-dark: color-mix(in srgb, var(--chrome-red-color) 75%, black);
-    --chrome-yellow-color-dark: color-mix(in srgb, var(--chrome-yellow-color) 80%, black);
-    --chrome-green-color-dark: color-mix(in srgb, var(--chrome-green-color) 70%, black);
-    --chrome-pink-color-dark: color-mix(in srgb, var(--chrome-pink-color) 75%, black);
-    --chrome-purple-color-dark: color-mix(in srgb, var(--chrome-purple-color) 80%, black);
-    --chrome-cyan-color-dark: color-mix(in srgb, var(--chrome-cyan-color) 80%, black);
+    --chrome-grey-color: #cccccc;
+    --chrome-blue-color: #8bb3f3;
 }
 
 body {
+    background: transparent;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
     font-size: 0.8rem;
     font-weight: 500;
@@ -426,81 +411,6 @@ h3 {
     height: 1px;
     background-color: rgba(0, 0, 0, 0.1);
     margin: 4px 8px;
-}
-
-.collection-color-select {
-    display: none;
-}
-
-.collection-color-select option {
-    appearance: none;
-    -webkit-appearance: none;
-}
-
-
-.color-picker-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
-    padding: 8px;
-    background: #fff;
-    border-radius: 8px;
-}
-
-.create-space-picker {
-    width: 100%;
-    display: flex;
-    background: none;
-    justify-content: space-between;
-}
-
-.color-swatch {
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    cursor: pointer;
-    border: 2px solid transparent;
-    transition: all 0.2s ease;
-}
-
-.color-swatch:hover {
-    transform: scale(1.1);
-}
-
-.color-swatch.selected {
-    border-color: rgba(0, 0, 0, 0.3);
-}
-
-.color-swatch[data-color="grey"] {
-    background-color: #9CA3AF;
-}
-
-.color-swatch[data-color="blue"] {
-    background-color: #60A5FA;
-}
-
-.color-swatch[data-color="red"] {
-    background-color: #F87171;
-}
-
-.color-swatch[data-color="yellow"] {
-    background-color: #FBBF24;
-}
-
-.color-swatch[data-color="green"] {
-    background-color: #34D399;
-}
-
-.color-swatch[data-color="pink"] {
-    background-color: #F472B6;
-}
-
-.color-swatch[data-color="purple"] {
-    background-color: #A78BFA;
-}
-
-.color-swatch[data-color="cyan"] {
-    background-color: #22D3EE;
 }
 
 .folder {
@@ -1830,27 +1740,10 @@ h3 {
 /* Dark mode support */
 @media (prefers-color-scheme: dark) {
     :root {
-        --sidebar-surface: #202124;
-        --sidebar-surface-hover: #303134;
-        /* In dark mode, use darker variants of user colors or fallback to dark defaults */
-        --chrome-grey-color: var(--user-chrome-grey-color, #546E7A);
-        --chrome-blue-color: var(--user-chrome-blue-color, #235d8b);
-        --chrome-red-color: var(--user-chrome-red-color, #963d3d);
-        --chrome-yellow-color: var(--user-chrome-yellow-color, #a38e54);
-        --chrome-green-color: var(--user-chrome-green-color, #4f8057);
-        --chrome-pink-color: var(--user-chrome-pink-color, #b06c92);
-        --chrome-purple-color: var(--user-chrome-purple-color, #8d75a1);
-        --chrome-cyan-color: var(--user-chrome-cyan-color, #5e9299);
-
-        /* Dark variants - auto-generated, darker in dark mode */
-        --chrome-grey-color-dark: color-mix(in srgb, var(--chrome-grey-color) 70%, black);
-        --chrome-blue-color-dark: color-mix(in srgb, var(--chrome-blue-color) 60%, black);
-        --chrome-red-color-dark: color-mix(in srgb, var(--chrome-red-color) 60%, black);
-        --chrome-yellow-color-dark: color-mix(in srgb, var(--chrome-yellow-color) 65%, black);
-        --chrome-green-color-dark: color-mix(in srgb, var(--chrome-green-color) 55%, black);
-        --chrome-pink-color-dark: color-mix(in srgb, var(--chrome-pink-color) 60%, black);
-        --chrome-purple-color-dark: color-mix(in srgb, var(--chrome-purple-color) 65%, black);
-        --chrome-cyan-color-dark: color-mix(in srgb, var(--chrome-cyan-color) 65%, black);
+        --sidebar-surface: transparent;
+        --sidebar-surface-hover: rgba(255, 255, 255, 0.08);
+        --chrome-grey-color: #546E7A;
+        --chrome-blue-color: #235d8b;
     }
 
     /* Dark mode text colors */
@@ -2006,7 +1899,4 @@ h3 {
         border-color: rgba(255, 255, 255, 0.16);
     }
 
-    .color-swatch.selected {
-        border-color: rgba(255, 255, 255, 0.5);
-    }
 }

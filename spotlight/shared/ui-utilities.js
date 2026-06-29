@@ -219,43 +219,8 @@ export class SpotlightUtils {
         };
     }
 
-    // Helper function to convert hex color to RGB string
-    static hexToRgb(hex) {
-        const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-        if (!result) return null;
-        return `${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}`;
-    }
-
-    // Generate accent color CSS based on active space color (from overlay.js)
-    static async getAccentColorCSS(collectionColor) {
-        // Default RGB values for each color name (matching --chrome-*-color variables in styles.css)
-        const defaultColorMap = {
-            grey: '204, 204, 204',
-            blue: '139, 179, 243',
-            red: '255, 158, 151',
-            yellow: '255, 226, 159',
-            green: '139, 218, 153',
-            pink: '251, 170, 215',
-            purple: '214, 166, 255',
-            cyan: '165, 226, 234'
-        };
-
-        let rgb = defaultColorMap[collectionColor] || defaultColorMap.purple;
-
-        // Try to get overridden color from settings
-        try {
-            const settings = await chrome.storage.sync.get(['colorOverrides']);
-            if (settings.colorOverrides && settings.colorOverrides[collectionColor]) {
-                const hexColor = settings.colorOverrides[collectionColor];
-                const rgbValue = this.hexToRgb(hexColor);
-                if (rgbValue) {
-                    rgb = rgbValue;
-                }
-            }
-        } catch (error) {
-            Logger.error('Error getting color overrides:', error);
-        }
-
+    static getAccentColorCSS() {
+        const rgb = '214, 166, 255';
         return `
             :root {
                 --spotlight-accent-color: rgb(${rgb});

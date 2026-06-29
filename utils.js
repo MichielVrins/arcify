@@ -94,7 +94,6 @@ const Utils = {
             autoArchiveEnabled: false, // Default: disabled
             autoArchiveIdleMinutes: 360, // Default: 30 minutes
             enableSpotlight: true, // Default: enabled (controls both spotlight and custom new tab)
-            colorOverrides: null, // Default: no color overrides
             debugLoggingEnabled: false, // Default: disabled (controls debug logging)
             showAllOpenTabsInCollapsedFolders: false, // Default: Arc behavior (only show active tab in collapsed folder)
             // ... other settings ...
