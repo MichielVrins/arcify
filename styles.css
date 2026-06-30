@@ -275,13 +275,24 @@ h3 {
 
 .sidebar-container {
     background-color: var(--collection-bg-color, rgba(255, 255, 255, 0.1));
-    padding: 16px 8px;
+    padding: 16px 8px 8px;
     display: flex;
     flex-direction: column;
     height: 100%;
-    gap: 16px;
+    gap: 8px;
     overflow-y: hidden;
     transition: background-color 0.3s ease;
+}
+
+.tabs-view {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.sidebar-view {
+    height: 100%;
+    min-height: 0;
 }
 
 .pinned-favicons {
@@ -678,8 +689,8 @@ h3 {
     display: flex;
     justify-content: flex-end;
     align-items: center;
-    margin-top: 12px;
-    min-height: 32px;
+    margin-top: 4px;
+    min-height: 24px;
 }
 
 .pinned-tabs,
