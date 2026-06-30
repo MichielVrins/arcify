@@ -58,6 +58,24 @@
             <small class="options-description">Default (off): show only the active tab under a collapsed folder (Arc behavior). Turn on to show all open tabs under collapsed folders.</small>
         </div>
 
+        <div class="options-setting-item">
+            <label for="sidebarSurfaceColor" class="options-label">Sidebar Surface Color:</label>
+            <div class="color-picker-wrapper">
+                <input type="color" id="sidebarSurfaceColor" class="color-picker" value="#fff8f6">
+                <button type="button" id="resetSidebarSurfaceColor" class="color-reset-btn">Reset</button>
+            </div>
+            <small class="options-description">Set this to your Chrome theme color for a seamless sidebar.</small>
+        </div>
+
+        <div class="options-setting-item">
+            <label for="newTabPosition" class="options-label">New Temporary Tabs:</label>
+            <select id="newTabPosition" class="options-input">
+                <option value="top">Open at top</option>
+                <option value="bottom">Open at bottom</option>
+            </select>
+            <small class="options-description">Choose where newly created temporary tabs appear in the sidebar.</small>
+        </div>
+
         <!-- Advanced Options Section -->
         <div class="advanced-options-section">
             <button type="button" class="advanced-options-toggle" id="advancedOptionsToggle">
@@ -65,19 +83,6 @@
                 <span class="advanced-options-chevron"></span>
             </button>
             <div class="advanced-options-content" id="advancedOptionsContent" style="display: none;">
-                <h3 class="advanced-options-title">Appearance</h3>
-                <small class="options-description">Match the sidebar surface to your Chrome theme.</small>
-
-                <div class="color-overrides-grid">
-                    <div class="color-override-item">
-                        <label for="sidebarSurfaceColor" class="color-override-label">Sidebar surface:</label>
-                        <div class="color-picker-wrapper">
-                            <input type="color" id="sidebarSurfaceColor" class="color-picker" value="#fff8f6">
-                            <button type="button" id="resetSidebarSurfaceColor" class="color-reset-btn">Reset</button>
-                        </div>
-                    </div>
-                </div>
-
                 <h3 class="advanced-options-title">Debug Options</h3>
                 <div class="options-setting-item options-setting-toggle">
                     <label for="debugLoggingEnabled" class="options-label">Enable Debug Logging:</label>

@@ -60,10 +60,6 @@ export async function closeTabsSafely(tabIds: number[]): Promise<void> {
   await chrome.tabs.remove(tabIds);
 }
 
-export async function moveNativeTab(tabId: number, index: number): Promise<void> {
-  await chrome.tabs.move(tabId, { index });
-}
-
 export function faviconUrl(url: string, size = 32): string {
   const favicon = new URL(chrome.runtime.getURL('/_favicon/'));
   favicon.searchParams.set('pageUrl', url);
@@ -127,10 +123,17 @@ export async function replacePinnedBindings(
 
 export interface ChromeTabEventHandlers {
   onChanged: () => void;
+  onCreated?: (tab: chrome.tabs.Tab) => void;
 }
 
-export function subscribeToChromeTabs({ onChanged }: ChromeTabEventHandlers): () => void {
-  const created = () => onChanged();
+export function subscribeToChromeTabs({
+  onChanged,
+  onCreated,
+}: ChromeTabEventHandlers): () => void {
+  const created = (tab: chrome.tabs.Tab) => {
+    onCreated?.(tab);
+    onChanged();
+  };
   const updated = () => onChanged();
   const removed = () => onChanged();
   const moved = () => onChanged();

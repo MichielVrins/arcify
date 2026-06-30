@@ -8,7 +8,6 @@ import {
   closeTabsSafely,
   createTab,
   faviconUrl,
-  moveNativeTab,
   queryCurrentWindowTabs,
   replacePinnedBindings,
   sendRuntimeMessage,
@@ -37,7 +36,6 @@ import {
 } from './tree';
 import type {
   ArchivedTab,
-  ContextMenuState,
   DragItem,
   DropTarget,
   DurableSidebarState,
@@ -65,7 +63,6 @@ function pinnedUrlsByItemId(items: PinnedItem[]): Record<string, string> {
 
 export function SidebarController() {
   const { state, dispatch } = useSidebarContext();
-  const [menu, setMenu] = useState<ContextMenuState>(null);
   const [renamingKey, setRenamingKey] = useState<string | null>(null);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [archivedTabs, setArchivedTabs] = useState<ArchivedTab[]>([]);
@@ -78,22 +75,31 @@ export function SidebarController() {
   const refreshSequence = useRef(0);
   const liveOwnership = useRef<Record<number, string>>({});
   const spotlightRelayTabId = useRef<number | null>(null);
+  const pendingNewTabIds = useRef(new Set<number>());
+  const newTabPosition = useRef<'top' | 'bottom'>('bottom');
 
   useEffect(() => {
-    void chrome.storage.sync.get('sidebarSurfaceColor').then(result => {
+    void chrome.storage.sync.get(['sidebarSurfaceColor', 'newTabPosition']).then(result => {
       setSurfaceColor(
         typeof result.sidebarSurfaceColor === 'string'
           ? result.sidebarSurfaceColor
           : null,
       );
+      newTabPosition.current = result.newTabPosition === 'top' ? 'top' : 'bottom';
     });
     const onChanged = (
       changes: Record<string, chrome.storage.StorageChange>,
       areaName: string,
     ) => {
-      if (areaName !== 'sync' || !changes.sidebarSurfaceColor) return;
-      const value = changes.sidebarSurfaceColor.newValue;
-      setSurfaceColor(typeof value === 'string' ? value : null);
+      if (areaName !== 'sync') return;
+      if (changes.sidebarSurfaceColor) {
+        const value = changes.sidebarSurfaceColor.newValue;
+        setSurfaceColor(typeof value === 'string' ? value : null);
+      }
+      if (changes.newTabPosition) {
+        newTabPosition.current =
+          changes.newTabPosition.newValue === 'top' ? 'top' : 'bottom';
+      }
     };
     chrome.storage.onChanged.addListener(onChanged);
     return () => chrome.storage.onChanged.removeListener(onChanged);
@@ -115,8 +121,16 @@ export function SidebarController() {
         liveOwnership.current,
         false,
       );
+      const newTemporaryTabIds = [...pendingNewTabIds.current];
+      pendingNewTabIds.current.clear();
       liveOwnership.current = ownership.itemIdByTabId;
-      dispatch({ type: 'tabsSynchronized', tabs, ...ownership });
+      dispatch({
+        type: 'tabsSynchronized',
+        tabs,
+        ...ownership,
+        newTemporaryTabIds,
+        newTabPosition: newTabPosition.current,
+      });
       await replacePinnedBindings(
         ownership.itemIdByTabId,
         pinnedUrlsByItemId(durable.pinnedItems),
@@ -166,6 +180,9 @@ export function SidebarController() {
     if (state.status !== 'ready') return;
     let timeout: ReturnType<typeof setTimeout> | null = null;
     return subscribeToChromeTabs({
+      onCreated: tab => {
+        if (tab.id != null) pendingNewTabIds.current.add(tab.id);
+      },
       onChanged: () => {
         if (timeout) clearTimeout(timeout);
         timeout = setTimeout(() => void synchronizeTabs(state.durable), 40);
@@ -259,11 +276,19 @@ export function SidebarController() {
       navigatedAway: Boolean(tab && isNavigatedAway(tab.url, item.url)),
     };
   }
+  const temporaryOrder = new Map(
+    state.runtime.temporaryTabOrder.map((tabId, index) => [tabId, index]),
+  );
   const temporaryRows: TabRowViewModel[] = state.runtime.tabs
     .filter(tab => {
       const ownerId = state.runtime.itemIdByTabId[tab.id];
       return !ownerId || !pinnedLinkIds.has(ownerId);
     })
+    .sort(
+      (left, right) =>
+        (temporaryOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+        (temporaryOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER),
+    )
     .map(tab => ({
       key: `temporary:${tab.id}`,
       tabId: tab.id,
@@ -339,7 +364,12 @@ export function SidebarController() {
     closingKeys: new Set(closingKeys),
     onActivate: row => void activateRow(row),
     onClose: row => void closeRow(row),
-    onContextMenu: (row, x, y) => setMenu({ kind: 'tab', row, x, y }),
+    onRequestRename: row => renameRow(row),
+    onDuplicate: row => void duplicateTab(row),
+    onToggleFavorite: row => toggleFavorite(row),
+    onTogglePinned: row => void togglePinned(row),
+    onReplaceUrl: row => void replacePinnedUrl(row),
+    onCloseBelow: row => void closeTemporaryTabsBelow(row),
     onRenameCommit: (key, title) => {
       if (key.startsWith('new-folder:')) {
         const encodedParent = key.slice('new-folder:'.length);
@@ -357,8 +387,9 @@ export function SidebarController() {
   const treeActions: PinnedTreeActions = {
     ...tabActions,
     onToggleFolder: folderId => dispatch({ type: 'toggleFolder', folderId }),
-    onFolderContextMenu: (folderId, x, y) =>
-      setMenu({ kind: 'folder', folderId, x, y }),
+    onRequestFolderRename: folderId => setRenamingKey(`item:${folderId}`),
+    onRequestSubfolder: folderId => beginCreateFolder(folderId),
+    onRequestFolderDeletion: folderId => requestFolderDeletion(folderId),
   };
 
   const handleDragEnd = useCallback(
@@ -391,12 +422,11 @@ export function SidebarController() {
       const tab = tabById[active.tabId];
       if (!tab) return;
       if (target.area === 'temporary') {
-        const targetRow = temporaryRows[target.index];
-        const targetTab = targetRow?.tabId ? tabById[targetRow.tabId] : null;
-        const targetIndex = targetTab
-          ? targetTab.index - (tab.index < targetTab.index ? 1 : 0)
-          : -1;
-        await moveNativeTab(tab.id, targetIndex);
+        dispatch({
+          type: 'moveTemporaryTab',
+          tabId: tab.id,
+          index: target.index,
+        });
         return;
       }
       const placement = target.area === 'favorite' ? 'favorite' : 'sidebar';
@@ -412,49 +442,36 @@ export function SidebarController() {
       rememberOwnership(tab.id, link.id);
       await commitDurable({ ...state.durable, pinnedItems: next });
     },
-    [commitDurable, state, tabById, temporaryRows],
+    [commitDurable, dispatch, state, tabById],
   );
 
-  const selectedItem =
-    menu?.kind === 'tab' && menu.row.itemId
-      ? findPinnedItem(state.durable.pinnedItems, menu.row.itemId)
-      : menu?.kind === 'folder'
-        ? findPinnedItem(state.durable.pinnedItems, menu.folderId)
-        : null;
-
-  const renameSelected = () => {
-    if (selectedItem) {
-      setRenamingKey(`item:${selectedItem.id}`);
-      return;
-    }
-    if (menu?.kind === 'tab' && menu.row.tabId) {
-      setRenamingKey(`tab:${menu.row.tabId}`);
-    }
+  const renameRow = (row: TabRowViewModel) => {
+    if (row.itemId) setRenamingKey(`item:${row.itemId}`);
+    else if (row.tabId) setRenamingKey(`tab:${row.tabId}`);
   };
 
-  const toggleFavorite = () => {
-    if (menu?.kind !== 'tab' || !menu.row.itemId) return;
-    const target = menu.row.favorite ? 'sidebar' : 'favorite';
+  const toggleFavorite = (row: TabRowViewModel) => {
+    if (!row.itemId) return;
+    const target = row.favorite ? 'sidebar' : 'favorite';
     const index =
       target === 'favorite'
         ? favoriteItems(state.durable.pinnedItems).length
         : sidebarItems(state.durable.pinnedItems).length;
     dispatch({
       type: 'movePinnedItem',
-      itemId: menu.row.itemId,
+      itemId: row.itemId,
       parentId: null,
       index,
       placement: target,
     });
   };
 
-  const togglePinned = async () => {
-    if (menu?.kind !== 'tab') return;
-    if (menu.row.pinned) {
-      await closeOrUnpin(false);
+  const togglePinned = async (row: TabRowViewModel) => {
+    if (row.pinned) {
+      await unpinRow(row);
       return;
     }
-    const tab = menu.row.tabId ? tabById[menu.row.tabId] : null;
+    const tab = row.tabId ? tabById[row.tabId] : null;
     if (!tab) return;
     const link = createLink(tab, 'sidebar');
     await bindPinnedTab(tab.id, link);
@@ -470,31 +487,38 @@ export function SidebarController() {
     });
   };
 
-  const closeOrUnpin = async (close: boolean) => {
-    if (menu?.kind !== 'tab') return;
-    if (close) {
-      await closeRow(menu.row);
-      return;
+  const unpinRow = async (row: TabRowViewModel) => {
+    if (!row.itemId) return;
+    setClosingKeys(keys => [...new Set([...keys, row.key])]);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    try {
+      if (row.tabId) {
+        await unbindPinnedTab(row.tabId);
+        rememberOwnership(row.tabId, null);
+      }
+      await commitDurable({
+        ...state.durable,
+        pinnedItems: removePinnedItem(
+          state.durable.pinnedItems,
+          row.itemId,
+        ).items,
+      });
+    } finally {
+      setClosingKeys(keys => keys.filter(key => key !== row.key));
     }
-    if (!menu.row.itemId) return;
-    if (menu.row.tabId) {
-      await unbindPinnedTab(menu.row.tabId);
-      rememberOwnership(menu.row.tabId, null);
-    }
-    await commitDurable({
-      ...state.durable,
-      pinnedItems: removePinnedItem(
-        state.durable.pinnedItems,
-        menu.row.itemId,
-      ).items,
-    });
   };
 
-  const closeTemporaryTabsBelow = async () => {
-    if (menu?.kind !== 'tab' || menu.row.pinned || menu.row.tabId == null) return;
-    const index = temporaryRows.findIndex(row => row.tabId === menu.row.tabId);
+  const closeTemporaryTabsBelow = async (row: TabRowViewModel) => {
+    if (row.pinned || row.tabId == null) return;
+    const index = temporaryRows.findIndex(candidate => candidate.tabId === row.tabId);
     if (index < 0) return;
     await closeTemporaryRows(temporaryRows.slice(index + 1));
+  };
+
+  const duplicateTab = async (row: TabRowViewModel) => {
+    const tab = await createTab(row.url);
+    rememberOwnership(tab.id, null);
+    await synchronizeTabs(state.durable);
   };
 
   const closeTemporaryRows = async (rows: TabRowViewModel[]) => {
@@ -510,11 +534,11 @@ export function SidebarController() {
     }
   };
 
-  const replacePinnedUrl = async () => {
-    if (menu?.kind !== 'tab' || !menu.row.itemId || !menu.row.tabId) return;
-    const tab = tabById[menu.row.tabId];
+  const replacePinnedUrl = async (row: TabRowViewModel) => {
+    if (!row.itemId || !row.tabId) return;
+    const tab = tabById[row.tabId];
     if (!tab) return;
-    const item = findPinnedLink(state.durable.pinnedItems, menu.row.itemId);
+    const item = findPinnedLink(state.durable.pinnedItems, row.itemId);
     if (!item) return;
     const nextItem = {
       ...item,
@@ -557,9 +581,8 @@ export function SidebarController() {
     setRenamingKey(`new-folder:${parentId || 'root'}`);
   };
 
-  const requestFolderDeletion = () => {
-    if (menu?.kind !== 'folder') return;
-    const folder = findPinnedItem(state.durable.pinnedItems, menu.folderId);
+  const requestFolderDeletion = (folderId: string) => {
+    const folder = findPinnedItem(state.durable.pinnedItems, folderId);
     if (folder?.type !== 'folder') return;
     setFolderPendingDeletion({ id: folder.id, title: folder.title });
   };
@@ -583,7 +606,6 @@ export function SidebarController() {
       rowByItemId={rowByItemId}
       temporaryRows={temporaryRows}
       expandedFolderIds={new Set(state.runtime.expandedFolderIds)}
-      menu={menu}
       archivedTabs={archivedTabs}
       archiveOpen={archiveOpen}
       folderPendingDeletion={folderPendingDeletion}
@@ -592,17 +614,6 @@ export function SidebarController() {
       onDragEnd={handleDragEnd}
       onCleanAll={() => void closeTemporaryRows(temporaryRows)}
       onNewTab={() => void sendRuntimeMessage({ command: 'toggleSpotlightNewTab' })}
-      onMenuClose={() => setMenu(null)}
-      onMenuRename={renameSelected}
-      onMenuCloseTab={() => void closeOrUnpin(true)}
-      onMenuCloseTabsBelow={() => void closeTemporaryTabsBelow()}
-      onMenuToggleFavorite={toggleFavorite}
-      onMenuTogglePinned={() => void togglePinned()}
-      onMenuReplaceUrl={() => void replacePinnedUrl()}
-      onMenuNewFolder={() =>
-        beginCreateFolder(menu?.kind === 'folder' ? menu.folderId : null)
-      }
-      onMenuDeleteFolder={requestFolderDeletion}
       onCancelFolderDeletion={() => setFolderPendingDeletion(null)}
       onConfirmFolderDeletion={() => void confirmFolderDeletion()}
       onToggleArchive={() => setArchiveOpen(value => !value)}

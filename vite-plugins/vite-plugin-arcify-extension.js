@@ -54,6 +54,17 @@ function getExtensionOutput(isDev = false) {
   };
 }
 
+function handleRollupWarning(warning, warn) {
+  const isRadixClientDirective =
+    warning.code === 'MODULE_LEVEL_DIRECTIVE' &&
+    warning.message.includes('"use client"') &&
+    warning.id?.includes('@radix-ui');
+
+  if (!isRadixClientDirective) {
+    warn(warning);
+  }
+}
+
 /**
  * Get Arcify extension build plugins
  */
@@ -220,7 +231,8 @@ export function createArcifyConfig(options = {}) {
       emptyOutDir: true,
       rollupOptions: {
         input: getExtensionInputs(),
-        output: getExtensionOutput(isDev)
+        output: getExtensionOutput(isDev),
+        onwarn: handleRollupWarning
       },
       target: 'es2020',
       minify: !isDev,

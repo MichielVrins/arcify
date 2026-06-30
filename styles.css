@@ -31,6 +31,18 @@ body,
         transform 140ms ease;
 }
 
+.react-tab-row.entering {
+    animation: tab-row-enter 150ms cubic-bezier(0.2, 0.75, 0.25, 1);
+}
+
+@keyframes tab-row-enter {
+    from {
+        max-height: 0;
+        opacity: 0;
+        transform: translateX(-5px);
+    }
+}
+
 .react-tab-row.closing {
     max-height: 0;
     opacity: 0;
@@ -128,17 +140,56 @@ body,
     z-index: 10001;
 }
 
-.context-menu-backdrop {
-    inset: 0;
-    position: fixed;
-    z-index: 999;
+.shadcn-context-menu {
+    animation: context-menu-in 110ms cubic-bezier(0.16, 1, 0.3, 1);
+    background: var(--sidebar-dialog-surface-default);
+    border: 1px solid rgba(45, 32, 28, 0.12);
+    border-radius: 9px;
+    box-shadow: 0 12px 32px rgba(25, 18, 16, 0.2);
+    min-width: 190px;
+    padding: 5px;
+    transform-origin: var(--radix-context-menu-content-transform-origin);
+    z-index: 1200;
 }
 
-.context-menu.react-context-menu {
+.shadcn-context-menu-item {
+    align-items: center;
+    border-radius: 6px;
+    color: inherit;
+    cursor: default;
     display: flex;
-    flex-direction: column;
-    position: fixed;
-    z-index: 9999;
+    font-size: 13px;
+    min-height: 30px;
+    outline: none;
+    padding: 5px 8px;
+    user-select: none;
+}
+
+.shadcn-context-menu-item:hover,
+.shadcn-context-menu-item[data-highlighted] {
+    background: rgba(0, 0, 0, 0.07);
+}
+
+.shadcn-context-menu-item.danger {
+    color: #b7332d;
+}
+
+.shadcn-context-menu-item.danger:hover,
+.shadcn-context-menu-item.danger[data-highlighted] {
+    background: rgba(183, 51, 45, 0.11);
+}
+
+.shadcn-context-menu-separator {
+    background: rgba(45, 32, 28, 0.12);
+    height: 1px;
+    margin: 4px;
+}
+
+@keyframes context-menu-in {
+    from {
+        opacity: 0;
+        transform: scale(0.97);
+    }
 }
 
 .confirm-dialog-backdrop {
@@ -202,12 +253,6 @@ body,
 
 .confirm-dialog-actions button.danger:hover {
     background: #aa302a;
-}
-
-.react-context-menu .context-menu-item {
-    border: 0;
-    text-align: left;
-    width: 100%;
 }
 
 :root {
@@ -347,65 +392,6 @@ h3 {
     width: 20px;
     height: 20px;
     object-fit: contain;
-}
-
-.context-menu {
-    display: block;
-    position: fixed;
-    background-color: #fff;
-    border: 1px solid #ccc;
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-    z-index: 1000;
-    min-width: 150px;
-}
-
-.context-menu-item {
-    padding: 8px 12px;
-    cursor: pointer;
-    background-color: #fff;
-    border-radius: 8px;
-    transition: background-color 0.3s ease;
-    color: #333;
-}
-
-.context-menu-item:hover {
-    background-color: var(--tab-hover-bg, rgba(0, 0, 0, 0.05));
-}
-
-.context-menu-separator {
-    height: 1px;
-    background-color: var(--sidebar-border-color, #eee);
-    margin: 4px 0;
-}
-
-.context-menu-item.with-submenu {
-    position: relative;
-}
-
-.context-menu-item.with-submenu::after {
-    content: '▶';
-    position: absolute;
-    right: 10px;
-    top: 50%;
-    transform: translateY(-50%);
-    font-size: 10px;
-    color: var(--sidebar-text-color-light, #999);
-}
-
-.context-menu.submenu {
-    display: none;
-    position: absolute;
-    left: 100%;
-    top: -5px;
-    /* Adjust as needed for vertical alignment */
-    z-index: 101;
-    /* Ensure submenu appears above the parent menu */
-    min-width: 150px;
-}
-
-.context-menu-item.with-submenu:hover>.context-menu.submenu {
-    display: block;
 }
 
 .collections-list {
@@ -653,6 +639,7 @@ h3 {
     min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
+    overflow-anchor: none;
     scrollbar-width: thin;
     scrollbar-color: rgba(70, 70, 70, 0.58) transparent;
     flex-grow: 1;
@@ -1948,27 +1935,18 @@ h3 {
         color: rgba(255, 255, 255, 0.6);
     }
 
-    /* Context menu dark mode */
-    .context-menu {
-        background-color: #2a2a2a;
-        border: 1px solid #444;
-    }
-
-    .context-menu-item {
-        background-color: #2a2a2a;
+    .shadcn-context-menu {
+        border-color: rgba(255, 255, 255, 0.14);
         color: #ECEFF1;
     }
 
-    .context-menu-item:hover {
-        background-color: rgba(255, 255, 255, 0.1);
+    .shadcn-context-menu-item:hover,
+    .shadcn-context-menu-item[data-highlighted] {
+        background: rgba(255, 255, 255, 0.1);
     }
 
-    .context-menu-separator {
-        background-color: #444;
-    }
-
-    .context-menu-item.with-submenu::after {
-        color: rgba(255, 255, 255, 0.6);
+    .shadcn-context-menu-separator {
+        background: rgba(255, 255, 255, 0.14);
     }
 
     .pinned-favicon {

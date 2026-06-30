@@ -37,6 +37,7 @@ export interface TabSnapshot {
 
 export interface RuntimeSidebarState {
   tabs: TabSnapshot[];
+  temporaryTabOrder: number[];
   activeTabId: number | null;
   tabIdByItemId: Record<string, number>;
   itemIdByTabId: Record<number, string>;
@@ -80,11 +81,6 @@ export interface TabRowViewModel {
   open: boolean;
   navigatedAway: boolean;
 }
-
-export type ContextMenuState =
-  | { kind: 'tab'; x: number; y: number; row: TabRowViewModel }
-  | { kind: 'folder'; x: number; y: number; folderId: string }
-  | null;
 
 export interface ArchivedTab {
   url: string;

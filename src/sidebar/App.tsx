@@ -9,11 +9,11 @@ import {
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
+  type CollisionDetection,
 } from '@dnd-kit/core';
-import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useState, type CSSProperties } from 'react';
 import {
   ConfirmDialog,
-  ContextMenu,
   FavoritesBar,
   PinnedTree,
   SidebarFooter,
@@ -21,10 +21,10 @@ import {
   type PinnedTreeActions,
   type TabActions,
 } from './components';
+import { animateReorder } from './reorderAnimation';
 import { favoriteItems, findPinnedItem, sidebarItems } from './tree';
 import type {
   ArchivedTab,
-  ContextMenuState,
   DragItem,
   DropTarget,
   PinnedItem,
@@ -40,7 +40,6 @@ export interface SidebarAppProps {
   rowByItemId: Record<string, TabRowViewModel>;
   temporaryRows: TabRowViewModel[];
   expandedFolderIds: Set<string>;
-  menu: ContextMenuState;
   archivedTabs: ArchivedTab[];
   archiveOpen: boolean;
   folderPendingDeletion: { id: string; title: string } | null;
@@ -49,15 +48,6 @@ export interface SidebarAppProps {
   onDragEnd(active: DragItem, target: DropTarget): void | Promise<void>;
   onCleanAll(): void;
   onNewTab(): void;
-  onMenuClose(): void;
-  onMenuRename(): void;
-  onMenuCloseTab(): void;
-  onMenuCloseTabsBelow(): void;
-  onMenuToggleFavorite(): void;
-  onMenuTogglePinned(): void;
-  onMenuReplaceUrl(): void;
-  onMenuNewFolder(): void;
-  onMenuDeleteFolder(): void;
   onCancelFolderDeletion(): void;
   onConfirmFolderDeletion(): void;
   onToggleArchive(): void;
@@ -66,46 +56,21 @@ export interface SidebarAppProps {
   onOpenSettings(): void;
 }
 
+const dropZoneCollisionDetection: CollisionDetection = args => {
+  return pointerWithin({
+    ...args,
+    droppableContainers: args.droppableContainers.filter(
+      container => container.data.current?.area,
+    ),
+  });
+};
+
 export function SidebarApp(props: SidebarAppProps) {
   const [activeDrag, setActiveDrag] = useState<DragItem | null>(null);
   const [dropIndicator, setDropIndicator] = useState<CSSProperties | null>(null);
-  const layoutPositions = useRef(new Map<string, DOMRect>());
-  const animateNextLayout = useRef(false);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   );
-
-  useLayoutEffect(() => {
-    const elements = Array.from(
-      document.querySelectorAll<HTMLElement>('[data-layout-key]'),
-    );
-    const nextPositions = new Map<string, DOMRect>();
-    let moved = false;
-    for (const element of elements) {
-      const key = element.dataset.layoutKey;
-      if (!key) continue;
-      const next = element.getBoundingClientRect();
-      nextPositions.set(key, next);
-      const previous = layoutPositions.current.get(key);
-      if (!animateNextLayout.current || !previous) continue;
-      const x = previous.left - next.left;
-      const y = previous.top - next.top;
-      if (Math.abs(x) < 0.5 && Math.abs(y) < 0.5) continue;
-      moved = true;
-      element.animate(
-        [
-          { transform: `translate(${x}px, ${y}px)` },
-          { transform: 'translate(0, 0)' },
-        ],
-        {
-          duration: 180,
-          easing: 'cubic-bezier(0.2, 0.75, 0.25, 1)',
-        },
-      );
-    }
-    layoutPositions.current = nextPositions;
-    if (moved) animateNextLayout.current = false;
-  });
 
   if (props.status === 'loading') {
     return <div className="sidebar-loading">Loading Arcify…</div>;
@@ -134,8 +99,7 @@ export function SidebarApp(props: SidebarAppProps) {
     const target = event.over?.data.current as DropTarget | undefined;
     setDropIndicator(null);
     if (active && target) {
-      animateNextLayout.current = true;
-      await props.onDragEnd(active, target);
+      await animateReorder(() => props.onDragEnd(active, target));
     }
     setActiveDrag(null);
   };
@@ -206,7 +170,7 @@ export function SidebarApp(props: SidebarAppProps) {
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={pointerWithin}
+      collisionDetection={dropZoneCollisionDetection}
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
       onDragCancel={handleDragCancel}
@@ -246,18 +210,6 @@ export function SidebarApp(props: SidebarAppProps) {
             <span>+</span> New Tab
           </button>
         </div>
-        <ContextMenu
-          menu={props.menu}
-          onClose={props.onMenuClose}
-          onRename={props.onMenuRename}
-          onCloseTab={props.onMenuCloseTab}
-          onCloseTabsBelow={props.onMenuCloseTabsBelow}
-          onToggleFavorite={props.onMenuToggleFavorite}
-          onTogglePinned={props.onMenuTogglePinned}
-          onReplaceUrl={props.onMenuReplaceUrl}
-          onNewFolder={props.onMenuNewFolder}
-          onDeleteFolder={props.onMenuDeleteFolder}
-        />
         {props.folderPendingDeletion ? (
           <ConfirmDialog
             title="Delete folder?"

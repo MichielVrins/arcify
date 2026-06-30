@@ -34,6 +34,8 @@ export type SidebarAction =
       tabs: TabSnapshot[];
       tabIdByItemId: Record<string, number>;
       itemIdByTabId: Record<number, string>;
+      newTemporaryTabIds: number[];
+      newTabPosition: 'top' | 'bottom';
     }
   | { type: 'initializationFailed'; error: string }
   | { type: 'toggleFolder'; folderId: string }
@@ -53,7 +55,8 @@ export type SidebarAction =
       placement: ItemPlacement;
     }
   | { type: 'renameItem'; itemId: string; title: string }
-  | { type: 'renameTemporary'; tabId: number; title: string };
+  | { type: 'renameTemporary'; tabId: number; title: string }
+  | { type: 'moveTemporaryTab'; tabId: number; index: number };
 
 const initialState: SidebarState = {
   status: 'loading',
@@ -61,6 +64,7 @@ const initialState: SidebarState = {
   durable: defaultDurableState(),
   runtime: {
     tabs: [],
+    temporaryTabOrder: [],
     activeTabId: null,
     tabIdByItemId: {},
     itemIdByTabId: {},
@@ -79,22 +83,48 @@ function reducer(state: SidebarState, action: SidebarAction): SidebarState {
         runtime: {
           ...state.runtime,
           tabs: action.tabs,
+          temporaryTabOrder: action.tabs
+            .filter(tab => !action.itemIdByTabId[tab.id])
+            .map(tab => tab.id)
+            .sort((left, right) => left - right),
           activeTabId: action.tabs.find(tab => tab.active)?.id ?? null,
           tabIdByItemId: action.tabIdByItemId,
           itemIdByTabId: action.itemIdByTabId,
         },
       };
-    case 'tabsSynchronized':
+    case 'tabsSynchronized': {
+      const temporaryIds = new Set(
+        action.tabs
+          .filter(tab => !action.itemIdByTabId[tab.id])
+          .map(tab => tab.id),
+      );
+      const retainedOrder = state.runtime.temporaryTabOrder.filter(id =>
+        temporaryIds.has(id),
+      );
+      const knownIds = new Set(retainedOrder);
+      const discoveredIds = action.tabs
+        .map(tab => tab.id)
+        .filter(id => temporaryIds.has(id) && !knownIds.has(id))
+        .sort((left, right) => left - right);
+      const explicitlyNew = new Set(action.newTemporaryTabIds);
+      const regularDiscoveries = discoveredIds.filter(id => !explicitlyNew.has(id));
+      const newIds = discoveredIds.filter(id => explicitlyNew.has(id));
+      const temporaryTabOrder =
+        action.newTabPosition === 'top'
+          ? [...newIds, ...retainedOrder, ...regularDiscoveries]
+          : [...retainedOrder, ...regularDiscoveries, ...newIds];
       return {
         ...state,
         runtime: {
           ...state.runtime,
           tabs: action.tabs,
+          temporaryTabOrder,
           activeTabId: action.tabs.find(tab => tab.active)?.id ?? null,
           tabIdByItemId: action.tabIdByItemId,
           itemIdByTabId: action.itemIdByTabId,
         },
       };
+    }
     case 'initializationFailed':
       return { ...state, status: 'error', error: action.error };
     case 'toggleFolder': {
@@ -160,6 +190,21 @@ function reducer(state: SidebarState, action: SidebarAction): SidebarState {
           },
         },
       };
+    case 'moveTemporaryTab': {
+      const currentIndex = state.runtime.temporaryTabOrder.indexOf(action.tabId);
+      const order = state.runtime.temporaryTabOrder.filter(
+        id => id !== action.tabId,
+      );
+      const targetIndex =
+        currentIndex >= 0 && currentIndex < action.index
+          ? action.index - 1
+          : action.index;
+      order.splice(Math.max(0, Math.min(targetIndex, order.length)), 0, action.tabId);
+      return {
+        ...state,
+        runtime: { ...state.runtime, temporaryTabOrder: order },
+      };
+    }
     default:
       return state;
   }

@@ -61,6 +61,8 @@ async function saveOptions() {
     sidebarSurfaceColor:
       document.getElementById('sidebarSurfaceColor')?.value ||
       DEFAULT_SIDEBAR_SURFACE_COLOR,
+    newTabPosition:
+      document.getElementById('newTabPosition')?.value === 'top' ? 'top' : 'bottom',
     debugLoggingEnabled: getCheckboxValue(document.getElementById('debugLoggingEnabled'), false)
   };
 
@@ -111,6 +113,10 @@ async function restoreOptions() {
     sidebarSurfaceColor.value =
       settings.sidebarSurfaceColor || DEFAULT_SIDEBAR_SURFACE_COLOR;
   }
+  const newTabPosition = document.getElementById('newTabPosition');
+  if (newTabPosition) {
+    newTabPosition.value = settings.newTabPosition === 'top' ? 'top' : 'bottom';
+  }
 }
 
 // Function to setup advanced options toggle
@@ -158,6 +164,7 @@ function setupAutoSave() {
   addListenerIfExists('autoArchiveIdleMinutes', 'input', debouncedSave);
 
   addListenerIfExists('sidebarSurfaceColor', 'input', debouncedSave);
+  addListenerIfExists('newTabPosition', 'change', saveOptions);
 }
 
 document.addEventListener('DOMContentLoaded', () => {

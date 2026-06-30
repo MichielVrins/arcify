@@ -1,10 +1,24 @@
 import { CSS } from '@dnd-kit/utilities';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import { FOLDER_CLOSED_DOTS_ICON, FOLDER_CLOSED_ICON, FOLDER_OPEN_ICON } from '../../icons.js';
+import {
+  ContextMenu as ShadcnContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from './context-menu';
 import type {
   ArchivedTab,
-  ContextMenuState,
   DragItem,
   DropTarget,
   PinnedFolder,
@@ -18,7 +32,12 @@ export interface TabActions {
   closingKeys: ReadonlySet<string>;
   onActivate(row: TabRowViewModel): void;
   onClose(row: TabRowViewModel): void;
-  onContextMenu(row: TabRowViewModel, x: number, y: number): void;
+  onRequestRename(row: TabRowViewModel): void;
+  onDuplicate(row: TabRowViewModel): void;
+  onToggleFavorite(row: TabRowViewModel): void;
+  onTogglePinned(row: TabRowViewModel): void;
+  onReplaceUrl(row: TabRowViewModel): void;
+  onCloseBelow(row: TabRowViewModel): void;
   onRenameCommit(key: string, title: string): void;
   onRenameCancel(): void;
 }
@@ -104,7 +123,9 @@ function NewFolderDraft({
 
 export interface PinnedTreeActions extends TabActions {
   onToggleFolder(folderId: string): void;
-  onFolderContextMenu(folderId: string, x: number, y: number): void;
+  onRequestFolderRename(folderId: string): void;
+  onRequestSubfolder(folderId: string): void;
+  onRequestFolderDeletion(folderId: string): void;
 }
 
 function hostname(url: string): string {
@@ -136,6 +157,80 @@ function openLinks(
   });
 }
 
+function useAnimatedItems<T>(
+  items: T[],
+  keyOf: (item: T) => string,
+): Array<{ item: T; entering: boolean; exiting: boolean }> {
+  const [rendered, setRendered] = useState(items);
+  const [enteringKeys, setEnteringKeys] = useState<Set<string>>(new Set());
+  const [exitingKeys, setExitingKeys] = useState<Set<string>>(new Set());
+  const latestItems = useRef(items);
+  const renderedItems = useRef(rendered);
+  latestItems.current = items;
+  renderedItems.current = rendered;
+  const itemKeys = new Set(items.map(keyOf));
+  const renderedKeys = new Set(rendered.map(keyOf));
+  const isPureReorder =
+    itemKeys.size === renderedKeys.size &&
+    [...itemKeys].every(key => renderedKeys.has(key));
+
+  useLayoutEffect(() => {
+    const previous = renderedItems.current;
+    const previousKeys = new Set(previous.map(keyOf));
+    const nextKeys = new Set(items.map(keyOf));
+    const removed = previous.filter(item => !nextKeys.has(keyOf(item)));
+    const addedKeys = new Set(
+      items.filter(item => !previousKeys.has(keyOf(item))).map(keyOf),
+    );
+    if (removed.length === 0) {
+      if (addedKeys.size > 0) {
+        setEnteringKeys(current => new Set([...current, ...addedKeys]));
+        window.setTimeout(() => {
+          setEnteringKeys(current => {
+            const next = new Set(current);
+            for (const key of addedKeys) next.delete(key);
+            return next;
+          });
+        }, 150);
+      }
+      setRendered(items);
+      return;
+    }
+
+    const removedKeys = new Set(removed.map(keyOf));
+    setExitingKeys(current => new Set([...current, ...removedKeys]));
+    const merged = [...items];
+    for (const item of removed) {
+      const previousIndex = previous.findIndex(
+        candidate => keyOf(candidate) === keyOf(item),
+      );
+      merged.splice(Math.min(previousIndex, merged.length), 0, item);
+    }
+    setRendered(merged);
+    window.setTimeout(() => {
+      const liveKeys = new Set(latestItems.current.map(keyOf));
+      setRendered(current =>
+        current.filter(item => !removedKeys.has(keyOf(item)) || liveKeys.has(keyOf(item))),
+      );
+      setExitingKeys(current => {
+        const next = new Set(current);
+        for (const key of removedKeys) next.delete(key);
+        return next;
+      });
+    }, 150);
+  }, [items, keyOf]);
+
+  const visibleItems = isPureReorder ? items : rendered;
+  return visibleItems.map(item => ({
+    item,
+    entering: enteringKeys.has(keyOf(item)),
+    exiting: exitingKeys.has(keyOf(item)),
+  }));
+}
+
+const pinnedLinkKey = (item: PinnedLink) => item.id;
+const tabRowKey = (row: TabRowViewModel) => row.key;
+
 interface DropZoneProps {
   id: string;
   target: DropTarget;
@@ -158,7 +253,6 @@ interface DraggableProps {
   dragItem: DragItem;
   children: ReactNode;
   className?: string;
-  layoutKey?: string;
 }
 
 function Draggable({
@@ -166,9 +260,14 @@ function Draggable({
   dragItem,
   children,
   className = '',
-  layoutKey,
 }: DraggableProps) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    isDragging,
+  } = useDraggable({
     id,
     data: dragItem,
   });
@@ -183,7 +282,7 @@ function Draggable({
       ref={setNodeRef}
       style={style}
       className={className}
-      data-layout-key={layoutKey}
+      data-reorder-key={id}
       {...listeners}
       {...attributes}
       tabIndex={undefined}
@@ -197,9 +296,59 @@ interface TabRowProps {
   row: TabRowViewModel;
   dragItem: DragItem;
   actions: TabActions;
+  entering?: boolean;
+  exiting?: boolean;
 }
 
-export function TabRow({ row, dragItem, actions }: TabRowProps) {
+function TabContextMenuContent({
+  row,
+  actions,
+}: {
+  row: TabRowViewModel;
+  actions: TabActions;
+}) {
+  return (
+    <ContextMenuContent>
+      <ContextMenuItem onSelect={() => actions.onRequestRename(row)}>
+        Rename
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={() => actions.onDuplicate(row)}>
+        Duplicate Tab
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      {row.pinned ? (
+        <ContextMenuItem onSelect={() => actions.onToggleFavorite(row)}>
+          {row.favorite ? 'Remove from Favorites' : 'Add to Favorites'}
+        </ContextMenuItem>
+      ) : null}
+      <ContextMenuItem onSelect={() => actions.onTogglePinned(row)}>
+        {row.pinned ? 'Unpin Tab' : 'Pin Tab'}
+      </ContextMenuItem>
+      {row.pinned && row.open ? (
+        <ContextMenuItem onSelect={() => actions.onReplaceUrl(row)}>
+          Replace Pinned URL
+        </ContextMenuItem>
+      ) : null}
+      <ContextMenuSeparator />
+      <ContextMenuItem onSelect={() => actions.onClose(row)}>
+        {row.open ? 'Close Tab' : 'Remove Pinned Tab'}
+      </ContextMenuItem>
+      {!row.pinned ? (
+        <ContextMenuItem onSelect={() => actions.onCloseBelow(row)}>
+          Close Tabs Below
+        </ContextMenuItem>
+      ) : null}
+    </ContextMenuContent>
+  );
+}
+
+export function TabRow({
+  row,
+  dragItem,
+  actions,
+  entering = false,
+  exiting = false,
+}: TabRowProps) {
   const renameKey = row.itemId ? `item:${row.itemId}` : `tab:${row.tabId}`;
   const renaming = actions.renamingKey === renameKey;
   const rowRef = useRef<HTMLDivElement>(null);
@@ -213,20 +362,16 @@ export function TabRow({ row, dragItem, actions }: TabRowProps) {
     <Draggable
       id={`tab:${row.key}`}
       dragItem={dragItem}
-      className={`react-tab-row ${actions.closingKeys.has(row.key) ? 'closing' : ''}`}
-      layoutKey={`tab:${row.key}`}
+      className={`react-tab-row ${entering ? 'entering' : ''} ${actions.closingKeys.has(row.key) || exiting ? 'closing' : ''}`}
     >
-      <div
-        ref={rowRef}
-        className={`tab ${row.active ? 'active' : ''} ${row.open ? '' : 'inactive bookmark-only'}`}
-        onClick={() => actions.onActivate(row)}
-        onContextMenu={event => {
-          event.preventDefault();
-          event.stopPropagation();
-          actions.onContextMenu(row, event.clientX, event.clientY);
-        }}
-      >
-        <div className="tab-surface">
+      <ShadcnContextMenu>
+        <ContextMenuTrigger asChild>
+          <div
+            ref={rowRef}
+            className={`tab ${row.active ? 'active' : ''} ${row.open ? '' : 'inactive bookmark-only'}`}
+            onClick={() => actions.onActivate(row)}
+          >
+            <div className="tab-surface">
           <img className="tab-favicon" src={row.faviconUrl} alt="" />
           {row.navigatedAway ? <span className="tab-url-changed-slash visible">/</span> : null}
           <div className="tab-details">
@@ -256,8 +401,11 @@ export function TabRow({ row, dragItem, actions }: TabRowProps) {
           >
             {row.open ? (row.pinned ? '−' : '×') : '×'}
           </button>
-        </div>
-      </div>
+            </div>
+          </div>
+        </ContextMenuTrigger>
+        <TabContextMenuContent row={row} actions={actions} />
+      </ShadcnContextMenu>
     </Draggable>
   );
 }
@@ -270,53 +418,53 @@ interface FavoritesBarProps {
 export function FavoritesBar({ favorites, actions }: FavoritesBarProps) {
   return (
     <div className="pinned-favicons" id="pinnedFavicons">
-      {favorites.map(({ item, row }, index) => (
-        <div className="react-favorite-slot" key={item.id}>
-          <DropZone
-            id={`favorite-before:${item.id}`}
-            target={{ area: 'favorite', index }}
-            horizontal
-          />
-          <Draggable
-            id={`favorite:${item.id}`}
-            dragItem={{ kind: 'pinned', itemId: item.id }}
-            className="react-favorite-drag"
-            layoutKey={`tab:${item.id}`}
-          >
-            {actions.renamingKey === `item:${item.id}` ? (
-              <InlineRename
-                renameKey={`item:${item.id}`}
-                initialTitle={row.title}
-                actions={actions}
-                className="favorite-title-input"
-              />
-            ) : (
-              <button
-                className={`pinned-favicon ${row.active ? 'active' : ''}`}
-              title={row.title}
-              onMouseDown={event => event.preventDefault()}
-              onClick={() => actions.onActivate(row)}
-                onContextMenu={event => {
-                  event.preventDefault();
-                  actions.onContextMenu(row, event.clientX, event.clientY);
-                }}
-              >
-                <img src={row.faviconUrl} alt={row.title} />
-              </button>
-            )}
-          </Draggable>
-        </div>
-      ))}
-      <DropZone
-        id="favorite-end"
-        target={{ area: 'favorite', index: favorites.length }}
-        horizontal
-      />
-      {favorites.length === 0 ? (
-        <div className="pinned-placeholder-container">
-          <div className="pinned-tab-placeholder" aria-label="Drop to add favorite" />
-        </div>
-      ) : null}
+        {favorites.map(({ item, row }, index) => (
+          <div className="react-favorite-slot" key={item.id}>
+            <DropZone
+              id={`favorite-before:${item.id}`}
+              target={{ area: 'favorite', index }}
+              horizontal
+            />
+            <Draggable
+              id={`favorite:${item.id}`}
+              dragItem={{ kind: 'pinned', itemId: item.id }}
+              className="react-favorite-drag"
+            >
+              {actions.renamingKey === `item:${item.id}` ? (
+                <InlineRename
+                  renameKey={`item:${item.id}`}
+                  initialTitle={row.title}
+                  actions={actions}
+                  className="favorite-title-input"
+                />
+              ) : (
+                <ShadcnContextMenu>
+                  <ContextMenuTrigger asChild>
+                    <button
+                      className={`pinned-favicon ${row.active ? 'active' : ''}`}
+                      title={row.title}
+                      onMouseDown={event => event.preventDefault()}
+                      onClick={() => actions.onActivate(row)}
+                    >
+                      <img src={row.faviconUrl} alt={row.title} />
+                    </button>
+                  </ContextMenuTrigger>
+                  <TabContextMenuContent row={row} actions={actions} />
+                </ShadcnContextMenu>
+              )}
+            </Draggable>
+          </div>
+        ))}
+        <DropZone
+          id="favorite-end"
+          target={{ area: 'favorite', index: favorites.length }}
+          horizontal
+        />
+        {favorites.length === 0 ? (
+          <div className="pinned-placeholder-container">
+            <div className="pinned-tab-placeholder" aria-label="Drop to add favorite" />
+          </div>
+        ) : null}
     </div>
   );
 }
@@ -397,38 +545,52 @@ function FolderHeader({
   });
 
   return (
-    <div
-      ref={setNodeRef}
-      className={`folder-header ${isOver ? 'folder-drop-active' : ''}`}
-      onClick={() => actions.onToggleFolder(folder.id)}
-      onContextMenu={event => {
-        event.preventDefault();
-        event.stopPropagation();
-        actions.onFolderContextMenu(folder.id, event.clientX, event.clientY);
-      }}
-    >
-      <div
-        className="folder-icon"
-        dangerouslySetInnerHTML={{
-          __html: expanded
-            ? FOLDER_OPEN_ICON
-            : hasOpenTabs
-              ? FOLDER_CLOSED_DOTS_ICON
-              : FOLDER_CLOSED_ICON,
-        }}
-      />
-      {actions.renamingKey === `item:${folder.id}` ? (
-        <InlineRename
-          renameKey={`item:${folder.id}`}
-          initialTitle={folder.title}
-          actions={actions}
-          className="folder-title-input"
-        />
-      ) : (
-        <span className="folder-title">{folder.title}</span>
-      )}
-      <button className={`folder-toggle ${expanded ? '' : 'collapsed'}`} />
-    </div>
+    <ShadcnContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          ref={setNodeRef}
+          className={`folder-header ${isOver ? 'folder-drop-active' : ''}`}
+          onClick={() => actions.onToggleFolder(folder.id)}
+        >
+          <div
+            className="folder-icon"
+            dangerouslySetInnerHTML={{
+              __html: expanded
+                ? FOLDER_OPEN_ICON
+                : hasOpenTabs
+                  ? FOLDER_CLOSED_DOTS_ICON
+                  : FOLDER_CLOSED_ICON,
+            }}
+          />
+          {actions.renamingKey === `item:${folder.id}` ? (
+            <InlineRename
+              renameKey={`item:${folder.id}`}
+              initialTitle={folder.title}
+              actions={actions}
+              className="folder-title-input"
+            />
+          ) : (
+            <span className="folder-title">{folder.title}</span>
+          )}
+          <button className={`folder-toggle ${expanded ? '' : 'collapsed'}`} />
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={() => actions.onRequestFolderRename(folder.id)}>
+          Rename
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => actions.onRequestSubfolder(folder.id)}>
+          New Folder
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          className="danger"
+          onSelect={() => actions.onRequestFolderDeletion(folder.id)}
+        >
+          Delete Folder
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ShadcnContextMenu>
   );
 }
 
@@ -442,7 +604,11 @@ export function FolderNode({
 }: FolderNodeProps) {
   const expanded = expandedFolderIds.has(folder.id);
   const hasOpenTabs = containsOpenTab(folder.children, rowByItemId);
-  const visibleOpenLinks = expanded ? [] : openLinks(folder.children, rowByItemId);
+  const visibleOpenLinks = useMemo(
+    () => expanded ? [] : openLinks(folder.children, rowByItemId),
+    [expanded, folder.children, rowByItemId],
+  );
+  const animatedOpenLinks = useAnimatedItems(visibleOpenLinks, pinnedLinkKey);
   return (
     <div className={`folder ${expanded ? '' : 'collapsed'}`}>
       <DropZone
@@ -452,7 +618,6 @@ export function FolderNode({
       <Draggable
         id={`folder:${folder.id}`}
         dragItem={{ kind: 'pinned', itemId: folder.id }}
-        layoutKey={`folder:${folder.id}`}
       >
         <FolderHeader
           folder={folder}
@@ -488,14 +653,16 @@ export function FolderNode({
           <NewFolderDraft parentId={folder.id} actions={actions} />
         </div>
       ) : null}
-      {!expanded && visibleOpenLinks.length > 0 ? (
+      {!expanded && animatedOpenLinks.length > 0 ? (
         <div className="folder-collapsed-tabs">
-          {visibleOpenLinks.map(item => (
+          {animatedOpenLinks.map(({ item, entering, exiting }) => (
             <TabRow
               key={item.id}
               row={rowByItemId[item.id]}
               dragItem={{ kind: 'pinned', itemId: item.id }}
               actions={actions}
+              entering={entering}
+              exiting={exiting}
             />
           ))}
         </div>
@@ -549,6 +716,7 @@ interface TemporaryTabsProps {
 }
 
 export function TemporaryTabs({ tabs, actions, onCleanAll }: TemporaryTabsProps) {
+  const animatedTabs = useAnimatedItems(tabs, tabRowKey);
   return (
     <div className="temporary-tabs">
       <div className="temp-header">
@@ -556,89 +724,32 @@ export function TemporaryTabs({ tabs, actions, onCleanAll }: TemporaryTabsProps)
         <button className="clean-tabs-btn" onClick={onCleanAll}>Clean All</button>
       </div>
       <div className="tabs-container" data-tab-type="temporary">
-        {tabs.map((row, index) => (
-          <div className="react-tree-node" key={row.tabId}>
-            <DropZone
-              id={`temporary-before:${row.tabId}`}
-              target={{ area: 'temporary', index }}
-            />
-            <TabRow
-              row={row}
-              dragItem={{ kind: 'temporary', tabId: row.tabId as number }}
-              actions={actions}
-            />
-          </div>
-        ))}
+        {animatedTabs.map(({ item: row, entering, exiting }) => {
+          const index = tabs.findIndex(candidate => candidate.key === row.key);
+          return (
+            <div className="react-tree-node" key={row.tabId}>
+              {!exiting ? (
+                <DropZone
+                  id={`temporary-before:${row.tabId}`}
+                  target={{ area: 'temporary', index }}
+                />
+              ) : null}
+              <TabRow
+                row={row}
+                dragItem={{ kind: 'temporary', tabId: row.tabId as number }}
+                actions={actions}
+                entering={entering}
+                exiting={exiting}
+              />
+            </div>
+          );
+        })}
         <DropZone
           id="temporary-end"
           target={{ area: 'temporary', index: tabs.length }}
         />
       </div>
     </div>
-  );
-}
-
-interface ContextMenuProps {
-  menu: ContextMenuState;
-  onClose(): void;
-  onRename(): void;
-  onCloseTab(): void;
-  onCloseTabsBelow(): void;
-  onToggleFavorite(): void;
-  onTogglePinned(): void;
-  onReplaceUrl(): void;
-  onNewFolder(): void;
-  onDeleteFolder(): void;
-}
-
-export function ContextMenu({
-  menu,
-  onClose,
-  onRename,
-  onCloseTab,
-  onCloseTabsBelow,
-  onToggleFavorite,
-  onTogglePinned,
-  onReplaceUrl,
-  onNewFolder,
-  onDeleteFolder,
-}: ContextMenuProps) {
-  if (!menu) return null;
-  const item = (label: string, action: () => void) => (
-    <button
-      className="context-menu-item"
-      onClick={() => {
-        action();
-        onClose();
-      }}
-    >
-      {label}
-    </button>
-  );
-  return (
-    <>
-      <div className="context-menu-backdrop" onClick={onClose} />
-      <div className="context-menu react-context-menu" style={{ left: menu.x, top: menu.y }}>
-        {item('Rename', onRename)}
-        {menu.kind === 'folder' ? (
-          <>
-            {item('New Folder', onNewFolder)}
-            {item('Delete Folder', onDeleteFolder)}
-          </>
-        ) : (
-          <>
-            {menu.row.pinned ? item(
-              menu.row.favorite ? 'Remove from Favorites' : 'Add to Favorites',
-              onToggleFavorite,
-            ) : null}
-            {item(menu.row.pinned ? 'Unpin Tab' : 'Pin Tab', onTogglePinned)}
-            {menu.row.pinned && menu.row.open ? item('Replace Pinned URL', onReplaceUrl) : null}
-            {item(menu.row.open ? 'Close Tab' : 'Remove Pinned Tab', onCloseTab)}
-            {!menu.row.pinned ? item('Close Tabs Below', onCloseTabsBelow) : null}
-          </>
-        )}
-      </div>
-    </>
   );
 }
 

@@ -96,6 +96,7 @@ const Utils = {
             enableSpotlight: true, // Default: enabled (controls both spotlight and custom new tab)
             debugLoggingEnabled: false, // Default: disabled (controls debug logging)
             showAllOpenTabsInCollapsedFolders: false, // Default: Arc behavior (only show active tab in collapsed folder)
+            newTabPosition: 'bottom',
             // ... other settings ...
         };
         const result = await chrome.storage.sync.get(defaultSettings);
