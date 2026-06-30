@@ -71,6 +71,10 @@ export function SidebarController() {
   const [archivedTabs, setArchivedTabs] = useState<ArchivedTab[]>([]);
   const [closingKeys, setClosingKeys] = useState<string[]>([]);
   const [surfaceColor, setSurfaceColor] = useState<string | null>(null);
+  const [folderPendingDeletion, setFolderPendingDeletion] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
   const refreshSequence = useRef(0);
   const liveOwnership = useRef<Record<number, string>>({});
   const spotlightRelayTabId = useRef<number | null>(null);
@@ -553,6 +557,23 @@ export function SidebarController() {
     setRenamingKey(`new-folder:${parentId || 'root'}`);
   };
 
+  const requestFolderDeletion = () => {
+    if (menu?.kind !== 'folder') return;
+    const folder = findPinnedItem(state.durable.pinnedItems, menu.folderId);
+    if (folder?.type !== 'folder') return;
+    setFolderPendingDeletion({ id: folder.id, title: folder.title });
+  };
+
+  const confirmFolderDeletion = async () => {
+    if (!folderPendingDeletion) return;
+    const folderId = folderPendingDeletion.id;
+    setFolderPendingDeletion(null);
+    await commitDurable({
+      ...state.durable,
+      pinnedItems: removePinnedItem(state.durable.pinnedItems, folderId).items,
+    });
+  };
+
   return (
     <SidebarApp
       status={state.status}
@@ -565,6 +586,7 @@ export function SidebarController() {
       menu={menu}
       archivedTabs={archivedTabs}
       archiveOpen={archiveOpen}
+      folderPendingDeletion={folderPendingDeletion}
       tabActions={tabActions}
       treeActions={treeActions}
       onDragEnd={handleDragEnd}
@@ -580,17 +602,9 @@ export function SidebarController() {
       onMenuNewFolder={() =>
         beginCreateFolder(menu?.kind === 'folder' ? menu.folderId : null)
       }
-      onMenuDeleteFolder={() => {
-        if (menu?.kind === 'folder') {
-          void commitDurable({
-            ...state.durable,
-            pinnedItems: removePinnedItem(
-              state.durable.pinnedItems,
-              menu.folderId,
-            ).items,
-          });
-        }
-      }}
+      onMenuDeleteFolder={requestFolderDeletion}
+      onCancelFolderDeletion={() => setFolderPendingDeletion(null)}
+      onConfirmFolderDeletion={() => void confirmFolderDeletion()}
       onToggleArchive={() => setArchiveOpen(value => !value)}
       onRestoreArchive={tab =>
         void (async () => {

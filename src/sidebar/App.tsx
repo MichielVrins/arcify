@@ -12,6 +12,7 @@ import {
 } from '@dnd-kit/core';
 import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import {
+  ConfirmDialog,
   ContextMenu,
   FavoritesBar,
   PinnedTree,
@@ -42,6 +43,7 @@ export interface SidebarAppProps {
   menu: ContextMenuState;
   archivedTabs: ArchivedTab[];
   archiveOpen: boolean;
+  folderPendingDeletion: { id: string; title: string } | null;
   tabActions: TabActions;
   treeActions: PinnedTreeActions;
   onDragEnd(active: DragItem, target: DropTarget): void | Promise<void>;
@@ -56,6 +58,8 @@ export interface SidebarAppProps {
   onMenuReplaceUrl(): void;
   onMenuNewFolder(): void;
   onMenuDeleteFolder(): void;
+  onCancelFolderDeletion(): void;
+  onConfirmFolderDeletion(): void;
   onToggleArchive(): void;
   onRestoreArchive(tab: ArchivedTab): void;
   onNewFolder(): void;
@@ -122,6 +126,7 @@ export function SidebarApp(props: SidebarAppProps) {
     '--collection-bg-color-dark': props.surfaceColor
       ? `color-mix(in srgb, ${props.surfaceColor} 92%, black)`
       : 'var(--sidebar-surface-hover)',
+    '--sidebar-dialog-surface': props.surfaceColor || 'var(--sidebar-dialog-surface-default)',
   } as CSSProperties;
 
   const handleDragEnd = async (event: DragEndEvent) => {
@@ -253,6 +258,15 @@ export function SidebarApp(props: SidebarAppProps) {
           onNewFolder={props.onMenuNewFolder}
           onDeleteFolder={props.onMenuDeleteFolder}
         />
+        {props.folderPendingDeletion ? (
+          <ConfirmDialog
+            title="Delete folder?"
+            message={`Delete "${props.folderPendingDeletion.title}" and remove its pinned items? Open tabs will remain open.`}
+            confirmLabel="Delete Folder"
+            onCancel={props.onCancelFolderDeletion}
+            onConfirm={props.onConfirmFolderDeletion}
+          />
+        ) : null}
       </div>
       {dropIndicator ? (
         <div className="shared-drop-indicator" style={dropIndicator} />

@@ -642,6 +642,55 @@ export function ContextMenu({
   );
 }
 
+interface ConfirmDialogProps {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  onCancel(): void;
+  onConfirm(): void;
+}
+
+export function ConfirmDialog({
+  title,
+  message,
+  confirmLabel,
+  onCancel,
+  onConfirm,
+}: ConfirmDialogProps) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    cancelRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onCancel]);
+
+  return (
+    <div className="confirm-dialog-backdrop" role="presentation" onMouseDown={onCancel}>
+      <div
+        className="confirm-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirm-dialog-title"
+        aria-describedby="confirm-dialog-message"
+        onMouseDown={event => event.stopPropagation()}
+      >
+        <h2 id="confirm-dialog-title">{title}</h2>
+        <p id="confirm-dialog-message">{message}</p>
+        <div className="confirm-dialog-actions">
+          <button ref={cancelRef} type="button" onClick={onCancel}>Cancel</button>
+          <button type="button" className="danger" onClick={onConfirm}>
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface SidebarFooterProps {
   archiveOpen: boolean;
   archivedTabs: ArchivedTab[];
