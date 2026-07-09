@@ -7,12 +7,11 @@
     "dev": "vite build --config vite.config.dev.js --watch",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "build:zip": "npm run build && npm run zip",
+    "build:zip": "pnpm run build && pnpm run zip",
     "zip": "node scripts/zip.js",
     "preview": "vite preview",
     "clean": "rm -rf dist dist-dev *.zip",
-    "info": "node scripts/build-info.js",
-    "release": "node scripts/release.js"
+    "info": "node scripts/build-info.js"
   },
   "devDependencies": {
     "@types/chrome": "^0.2.0",

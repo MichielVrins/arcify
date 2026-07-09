@@ -42,18 +42,18 @@ async function displayBuildInfo() {
   
   // Available scripts
   console.log('🛠️  Available Commands:');
-  console.log('   npm run dev        - Development build with file watching');
-  console.log('   npm run build      - Production build');
-  console.log('   npm run build:zip  - Build and create zip package');
-  console.log('   npm run zip        - Create zip from existing build');
-  console.log('   npm run clean      - Remove all build artifacts');
-  console.log('   npm run preview    - Preview the built extension\n');
+  console.log('   pnpm run dev        - Development build with file watching');
+  console.log('   pnpm run build      - Production build');
+  console.log('   pnpm run build:zip  - Build and create zip package');
+  console.log('   pnpm run zip        - Create zip from existing build');
+  console.log('   pnpm run clean      - Remove all build artifacts');
+  console.log('   pnpm run preview    - Preview the built extension\n');
   
   console.log('🎯 Next Steps:');
-  console.log('   1. Run "npm install" to install dependencies');
-  console.log('   2. Run "npm run dev" for development');
-  console.log('   3. Run "npm run build:zip" for distribution');
+  console.log('   1. Run "pnpm install" to install dependencies');
+  console.log('   2. Run "pnpm run dev" for development');
+  console.log('   3. Run "pnpm run build:zip" for distribution');
   console.log('   4. Load the extension from dist/ or dist-dev/ in Chrome');
 }
 
-displayBuildInfo().catch(console.error); 
+displayBuildInfo().catch(console.error);

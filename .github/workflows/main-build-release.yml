@@ -1,0 +1,61 @@
+name: Publish Main Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-main-build
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build extension package
+        run: pnpm run build:zip
+
+      - name: Generate checksum
+        run: sha256sum arcify-extension.zip > arcify-extension.zip.sha256
+
+      - name: Move the rolling build tag
+        run: git push --force origin "$GITHUB_SHA:refs/tags/main-build"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES="Latest build from main.
+
+          Commit: $GITHUB_SHA
+
+          Download arcify-extension.zip, extract it, then load the folder through chrome://extensions with Developer mode enabled."
+
+          if gh release view main-build >/dev/null 2>&1; then
+            gh release edit main-build --title "Arcify main build" --notes "$NOTES" --prerelease
+          else
+            gh release create main-build --title "Arcify main build" --notes "$NOTES" --prerelease
+          fi
+
+          gh release upload main-build arcify-extension.zip arcify-extension.zip.sha256 --clobber
