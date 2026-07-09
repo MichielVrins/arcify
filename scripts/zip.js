@@ -12,7 +12,7 @@ async function createZip() {
   
   // Check if dist folder exists
   if (!await fs.pathExists(distPath)) {
-    console.error('❌ dist folder not found. Please run "npm run build" first.');
+    console.error('❌ dist folder not found. Please run "pnpm run build" first.');
     process.exit(1);
   }
   
@@ -68,4 +68,4 @@ async function createZip() {
 createZip().catch((error) => {
   console.error('❌ Failed to create zip:', error);
   process.exit(1);
-}); 
+});

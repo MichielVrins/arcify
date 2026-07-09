@@ -98,46 +98,12 @@ Notable changes:
 - `pnpm run clean` - Remove all build artifacts
 - `pnpm run preview` - Preview the built extension
 - `pnpm run info` - Display build information and status
-- `pnpm run release <type>` - Create a new release (patch/minor/major/x.y.z)
 
 ### Release Process
 
-The project uses automated releases via GitHub Actions. To create a new release:
+Each push to `main` builds and publishes a rolling **Arcify main build** prerelease. It contains `arcify-extension.zip` and its SHA-256 checksum.
 
-1. **Prepare your changes**
-   ```bash
-   # Make sure all changes are committed
-   git status
-   ```
-
-2. **Create a release**
-   ```bash
-   # For bug fixes (2.2.0 → 2.2.1)
-   pnpm run release patch
-   
-   # For new features (2.2.0 → 2.3.0)
-   pnpm run release minor
-   
-   # For breaking changes (2.2.0 → 3.0.0)
-   pnpm run release major
-   
-   # For specific version
-   pnpm run release 2.5.0
-   ```
-
-3. **Automated process**
-   - Updates `package.json` and `manifest.json` versions
-   - Builds and tests the extension
-   - Creates a git tag and pushes to GitHub
-   - GitHub Actions automatically:
-     - Builds the extension
-     - Generates release notes from commits
-     - Creates a GitHub release
-     - Attaches the zip file and SHA256 checksum
-
-4. **Monitor the release**
-   - Check the [Actions tab](https://github.com/nisargkolhe/arcify/actions) for build status
-   - Review the generated release at [Releases](https://github.com/nisargkolhe/arcify/releases)
+Download the latest main build from the [GitHub Releases page](https://github.com/MichielVrins/arcify/releases/tag/main-build). Extract the ZIP, then load the extracted folder through `chrome://extensions` with Developer mode enabled.
 
 ## Issues and Feature Requests
 
