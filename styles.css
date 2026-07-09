@@ -840,6 +840,66 @@ h3 {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
+.split-tab-pair {
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+    position: relative;
+    margin: 5px 0;
+    padding: 5px;
+    border: 1px solid rgba(45, 32, 28, 0.12);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.68);
+    box-shadow: 0 3px 10px rgba(45, 32, 28, 0.10);
+}
+
+.split-tab-pair .react-tab-row {
+    flex: 1 1 0;
+    min-width: 0;
+    max-height: none;
+    overflow: visible;
+}
+
+.split-tab-pair .tab {
+    height: 100%;
+    padding: 0;
+}
+
+.split-tab-pair .tab-surface {
+    min-height: 36px;
+    padding: 6px 10px;
+    background: rgba(45, 32, 28, 0.08);
+}
+
+.split-tab-pair .tab.active .tab-surface {
+    background: rgba(45, 32, 28, 0.14);
+    box-shadow: none;
+}
+
+.split-tab-pair .tab-details {
+    min-width: 0;
+}
+
+.split-tab-pair .tab-title-display {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.split-tab-pair .tab-close,
+.split-tab-pair .tab-remove {
+    display: none;
+}
+
+.split-tab-pair-drop-zone {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 12px;
+    transform: translateX(-50%);
+}
+
 .tab-favicon {
     width: 16px;
     height: 16px;

@@ -1,5 +1,7 @@
 import type { PinnedLink, RuntimeMessageMap, TabSnapshot } from './types';
 
+type SplitViewTab = chrome.tabs.Tab & { splitViewId?: number };
+
 function toSnapshot(tab: chrome.tabs.Tab): TabSnapshot | null {
   if (
     tab.id == null ||
@@ -9,6 +11,7 @@ function toSnapshot(tab: chrome.tabs.Tab): TabSnapshot | null {
     return null;
   }
   const url = tab.url || tab.pendingUrl || `about:blank#arcify-tab-${tab.id}`;
+  const splitViewId = (tab as SplitViewTab).splitViewId;
   return {
     id: tab.id,
     windowId: tab.windowId,
@@ -16,6 +19,7 @@ function toSnapshot(tab: chrome.tabs.Tab): TabSnapshot | null {
     title: tab.title || 'New Tab',
     url,
     favIconUrl: tab.favIconUrl,
+    splitViewId: typeof splitViewId === 'number' && splitViewId >= 0 ? splitViewId : null,
     active: Boolean(tab.active),
     audible: Boolean(tab.audible),
     discarded: Boolean(tab.discarded),

@@ -285,6 +285,7 @@ export function SidebarController() {
       favorite: item.placement === 'favorite',
       open: Boolean(tab),
       navigatedAway: Boolean(tab && isNavigatedAway(tab.url, item.url)),
+      splitViewId: tab?.splitViewId ?? null,
     };
   }
   const temporaryOrder = new Map(
@@ -313,6 +314,7 @@ export function SidebarController() {
       favorite: false,
       open: true,
       navigatedAway: false,
+      splitViewId: tab.splitViewId,
     }));
 
   const activateRow = useCallback(

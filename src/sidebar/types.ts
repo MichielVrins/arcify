@@ -30,6 +30,7 @@ export interface TabSnapshot {
   title: string;
   url: string;
   favIconUrl?: string;
+  splitViewId: number | null;
   active: boolean;
   audible: boolean;
   discarded: boolean;
@@ -80,6 +81,7 @@ export interface TabRowViewModel {
   favorite: boolean;
   open: boolean;
   navigatedAway: boolean;
+  splitViewId: number | null;
 }
 
 export interface ArchivedTab {

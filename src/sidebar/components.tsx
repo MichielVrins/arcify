@@ -296,6 +296,7 @@ interface TabRowProps {
   row: TabRowViewModel;
   dragItem: DragItem;
   actions: TabActions;
+  compact?: boolean;
   entering?: boolean;
   exiting?: boolean;
 }
@@ -346,6 +347,7 @@ export function TabRow({
   row,
   dragItem,
   actions,
+  compact = false,
   entering = false,
   exiting = false,
 }: TabRowProps) {
@@ -362,7 +364,7 @@ export function TabRow({
     <Draggable
       id={`tab:${row.key}`}
       dragItem={dragItem}
-      className={`react-tab-row ${entering ? 'entering' : ''} ${actions.closingKeys.has(row.key) || exiting ? 'closing' : ''}`}
+      className={`react-tab-row ${compact ? 'split-tab' : ''} ${entering ? 'entering' : ''} ${actions.closingKeys.has(row.key) || exiting ? 'closing' : ''}`}
     >
       <ShadcnContextMenu>
         <ContextMenuTrigger asChild>
@@ -715,8 +717,48 @@ interface TemporaryTabsProps {
   onCleanAll(): void;
 }
 
+interface AnimatedTabRow {
+  item: TabRowViewModel;
+  entering: boolean;
+  exiting: boolean;
+}
+
+function groupSplitTabs(rows: AnimatedTabRow[]): AnimatedTabRow[][] {
+  const splitPairs = new Map<number, AnimatedTabRow[]>();
+  for (const row of rows) {
+    if (row.item.splitViewId == null) continue;
+    const pair = splitPairs.get(row.item.splitViewId) || [];
+    pair.push(row);
+    splitPairs.set(row.item.splitViewId, pair);
+  }
+
+  const pairedIds = new Set(
+    [...splitPairs.entries()]
+      .filter(([, pair]) => pair.length === 2 && pair.every(row => !row.exiting))
+      .map(([splitViewId]) => splitViewId),
+  );
+  const renderedPairs = new Set<number>();
+
+  return rows.flatMap(row => {
+    const splitViewId = row.item.splitViewId;
+    if (splitViewId == null || !pairedIds.has(splitViewId)) return [[row]];
+    if (renderedPairs.has(splitViewId)) return [];
+    renderedPairs.add(splitViewId);
+    return [splitPairs.get(splitViewId) as AnimatedTabRow[]];
+  });
+}
+
+function SplitPairDropZone({ target }: { target: DropTarget }) {
+  const { setNodeRef } = useDroppable({
+    id: `temporary-split-between:${target.index}`,
+    data: target,
+  });
+  return <div ref={setNodeRef} className="split-tab-pair-drop-zone" aria-hidden="true" />;
+}
+
 export function TemporaryTabs({ tabs, actions, onCleanAll }: TemporaryTabsProps) {
   const animatedTabs = useAnimatedItems(tabs, tabRowKey);
+  const tabGroups = groupSplitTabs(animatedTabs);
   return (
     <div className="temporary-tabs">
       <div className="temp-header">
@@ -724,23 +766,44 @@ export function TemporaryTabs({ tabs, actions, onCleanAll }: TemporaryTabsProps)
         <button className="clean-tabs-btn" onClick={onCleanAll}>Clean All</button>
       </div>
       <div className="tabs-container" data-tab-type="temporary">
-        {animatedTabs.map(({ item: row, entering, exiting }) => {
-          const index = tabs.findIndex(candidate => candidate.key === row.key);
+        {tabGroups.map(group => {
+          const [{ item: firstRow }] = group;
+          const index = tabs.findIndex(candidate => candidate.key === firstRow.key);
+          const splitPair = group.length === 2;
           return (
-            <div className="react-tree-node" key={row.tabId}>
-              {!exiting ? (
+            <div className="react-tree-node" key={firstRow.tabId}>
+              {!group[0].exiting ? (
                 <DropZone
-                  id={`temporary-before:${row.tabId}`}
+                  id={`temporary-before:${firstRow.tabId}`}
                   target={{ area: 'temporary', index }}
                 />
               ) : null}
-              <TabRow
-                row={row}
-                dragItem={{ kind: 'temporary', tabId: row.tabId as number }}
-                actions={actions}
-                entering={entering}
-                exiting={exiting}
-              />
+              {splitPair ? (
+                <div className="split-tab-pair">
+                  {group.map(({ item: row, entering, exiting }) => (
+                    <TabRow
+                      key={row.key}
+                      row={row}
+                      dragItem={{ kind: 'temporary', tabId: row.tabId as number }}
+                      actions={actions}
+                      compact
+                      entering={entering}
+                      exiting={exiting}
+                    />
+                  ))}
+                  <SplitPairDropZone
+                    target={{ area: 'temporary', index: index + 1 }}
+                  />
+                </div>
+              ) : (
+                <TabRow
+                  row={firstRow}
+                  dragItem={{ kind: 'temporary', tabId: firstRow.tabId as number }}
+                  actions={actions}
+                  entering={group[0].entering}
+                  exiting={group[0].exiting}
+                />
+              )}
             </div>
           );
         })}
