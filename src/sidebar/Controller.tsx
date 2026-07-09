@@ -76,6 +76,7 @@ export function SidebarController() {
   const liveOwnership = useRef<Record<number, string>>({});
   const spotlightRelayTabId = useRef<number | null>(null);
   const pendingNewTabIds = useRef(new Set<number>());
+  const temporaryInsertAfterByTabId = useRef(new Map<number, number>());
   const newTabPosition = useRef<'top' | 'bottom'>('bottom');
 
   useEffect(() => {
@@ -123,12 +124,22 @@ export function SidebarController() {
       );
       const newTemporaryTabIds = [...pendingNewTabIds.current];
       pendingNewTabIds.current.clear();
+      const temporaryInsertAfter = Object.fromEntries(
+        newTemporaryTabIds.flatMap(tabId => {
+          const sourceTabId = temporaryInsertAfterByTabId.current.get(tabId);
+          return sourceTabId == null ? [] : [[tabId, sourceTabId]];
+        }),
+      );
+      for (const tabId of newTemporaryTabIds) {
+        temporaryInsertAfterByTabId.current.delete(tabId);
+      }
       liveOwnership.current = ownership.itemIdByTabId;
       dispatch({
         type: 'tabsSynchronized',
         tabs,
         ...ownership,
         newTemporaryTabIds,
+        temporaryInsertAfterByTabId: temporaryInsertAfter,
         newTabPosition: newTabPosition.current,
       });
       await replacePinnedBindings(
@@ -517,6 +528,10 @@ export function SidebarController() {
 
   const duplicateTab = async (row: TabRowViewModel) => {
     const tab = await createTab(row.url);
+    pendingNewTabIds.current.add(tab.id);
+    if (!row.pinned && row.tabId != null) {
+      temporaryInsertAfterByTabId.current.set(tab.id, row.tabId);
+    }
     rememberOwnership(tab.id, null);
     await synchronizeTabs(state.durable);
   };

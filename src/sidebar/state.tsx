@@ -35,6 +35,7 @@ export type SidebarAction =
       tabIdByItemId: Record<string, number>;
       itemIdByTabId: Record<number, string>;
       newTemporaryTabIds: number[];
+      temporaryInsertAfterByTabId: Record<number, number>;
       newTabPosition: 'top' | 'bottom';
     }
   | { type: 'initializationFailed'; error: string }
@@ -109,10 +110,20 @@ function reducer(state: SidebarState, action: SidebarAction): SidebarState {
       const explicitlyNew = new Set(action.newTemporaryTabIds);
       const regularDiscoveries = discoveredIds.filter(id => !explicitlyNew.has(id));
       const newIds = discoveredIds.filter(id => explicitlyNew.has(id));
+      const configuredNewIds = newIds.filter(
+        id => action.temporaryInsertAfterByTabId[id] == null,
+      );
       const temporaryTabOrder =
         action.newTabPosition === 'top'
-          ? [...newIds, ...retainedOrder, ...regularDiscoveries]
-          : [...retainedOrder, ...regularDiscoveries, ...newIds];
+          ? [...configuredNewIds, ...retainedOrder, ...regularDiscoveries]
+          : [...retainedOrder, ...regularDiscoveries, ...configuredNewIds];
+      for (const tabId of newIds) {
+        const sourceTabId = action.temporaryInsertAfterByTabId[tabId];
+        if (sourceTabId == null) continue;
+        const sourceIndex = temporaryTabOrder.indexOf(sourceTabId);
+        if (sourceIndex < 0) continue;
+        temporaryTabOrder.splice(sourceIndex + 1, 0, tabId);
+      }
       return {
         ...state,
         runtime: {
