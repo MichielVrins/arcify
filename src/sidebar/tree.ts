@@ -77,10 +77,18 @@ export function findItemLocation(
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index];
     if (item.id === id) {
+      const placement = item.type === 'link' ? item.placement : 'sidebar';
+      const placementIndex = parentId === null
+        ? items.slice(0, index).filter(candidate => {
+            const candidatePlacement =
+              candidate.type === 'link' ? candidate.placement : 'sidebar';
+            return candidatePlacement === placement;
+          }).length
+        : index;
       return {
         parentId,
-        index,
-        placement: item.type === 'link' ? item.placement : 'sidebar',
+        index: placementIndex,
+        placement,
       };
     }
     if (item.type === 'folder') {
