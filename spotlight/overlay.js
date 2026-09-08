@@ -44,6 +44,22 @@ function isSupportedGuardUrl(url) {
     return typeof url === 'string' && /^(https?:)?\/\//i.test(url);
 }
 
+function isTabSwitcherModifierRelease(event) {
+    return (event.key === 'Alt' || event.code === 'AltLeft' || event.code === 'AltRight')
+        && !event.altKey;
+}
+
+if (!window.arcifyTabSwitcherKeyListenerInstalled) {
+    window.arcifyTabSwitcherKeyListenerInstalled = true;
+    window.addEventListener('keyup', (event) => {
+        if (!isTabSwitcherModifierRelease(event)) {
+            return;
+        }
+
+        chrome.runtime.sendMessage({ action: 'tabSwitcherKeyUp' }).catch(() => {});
+    }, true);
+}
+
 function shouldIgnoreGuardedClick(event, anchor) {
     if (!anchor) return true;
     if (event.defaultPrevented || event.button !== 0) return true;

@@ -82,14 +82,19 @@
     },
     "recentTabSwitcher": {
       "suggested_key": {
-        "default": "Alt+Tab"
+        "default": "Alt+Tab",
+        "mac": "Option+Tab"
       },
       "description": "Switch tabs in recent order"
     },
-    "reloadExtension": {
+    "recentTabSwitcherPrevious": {
       "suggested_key": {
-        "default": "Alt+Shift+R"
+        "default": "Alt+Shift+Tab",
+        "mac": "Option+Shift+Tab"
       },
+      "description": "Switch tabs backward in recent order"
+    },
+    "reloadExtension": {
       "description": "Reload Arcify extension"
     }
   },

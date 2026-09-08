@@ -257,6 +257,20 @@ export function SidebarController() {
     };
   }, []);
 
+  useEffect(() => {
+    const onTabSwitcherModifierRelease = (event: KeyboardEvent) => {
+      const isAltRelease =
+        (event.key === 'Alt' || event.code === 'AltLeft' || event.code === 'AltRight') &&
+        !event.altKey;
+      if (!isAltRelease) return;
+
+      chrome.runtime.sendMessage({ action: 'tabSwitcherKeyUp' }).catch(() => {});
+    };
+
+    window.addEventListener('keyup', onTabSwitcherModifierRelease, true);
+    return () => window.removeEventListener('keyup', onTabSwitcherModifierRelease, true);
+  }, []);
+
   const commitDurable = useCallback(
     async (durable: DurableSidebarState) => {
       dispatch({ type: 'replaceDurable', durable });

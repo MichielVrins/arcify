@@ -32,9 +32,11 @@ function invalidateSpotlightSearchCache() {
 
 const AUTO_ARCHIVE_ALARM_NAME = 'autoArchiveTabsAlarm';
 const TAB_ACTIVITY_STORAGE_KEY = 'tabLastActivity'; // Key to store timestamps
-const TAB_SWITCHER_SESSION_TIMEOUT_MS = 1400;
+const TAB_SWITCHER_FALLBACK_TIMEOUT_MS = 3000;
+const TAB_SWITCHER_SESSION_TIMEOUT_MS = TAB_SWITCHER_FALLBACK_TIMEOUT_MS;
 const TAB_SWITCHER_HISTORY_LIMIT = 7;
 let tabSwitcherSession = null;
+let tabSwitcherModifierReleased = false;
 const tabPreviewCache = new Map();
 const pendingTabSwitcherHideTimers = new Map();
 
@@ -168,7 +170,11 @@ if (chrome.contextMenus) {
 
 chrome.commands.onCommand.addListener(async function (command) {
     if (command === "recentTabSwitcher") {
-        await switchRecentTab();
+        tabSwitcherModifierReleased = false;
+        await switchRecentTab(1);
+    } else if (command === "recentTabSwitcherPrevious") {
+        tabSwitcherModifierReleased = false;
+        await switchRecentTab(-1);
     } else if (command === "toggleSpotlightNewTab") {
         await injectSpotlightScript(SpotlightTabMode.NEW_TAB);
     } else if (command === "copyCurrentUrl") {
@@ -183,6 +189,20 @@ function resetTabSwitcherSession() {
         clearTimeout(tabSwitcherSession.timeoutId);
     }
     tabSwitcherSession = null;
+}
+
+async function finishTabSwitcherSession(sourceTabId = null) {
+    const sessionTabIds = tabSwitcherSession?.tabs?.map(tab => tab.id) || [];
+    resetTabSwitcherSession();
+
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tabIds = [...new Set([
+        ...sessionTabIds,
+        sourceTabId,
+        activeTab?.id
+    ].filter(Boolean))];
+
+    await Promise.all(tabIds.map(tabId => hideTabSwitcherOverlay(tabId)));
 }
 
 function scheduleTabSwitcherSessionReset() {
@@ -255,7 +275,7 @@ async function showTabSwitcherOverlay(targetTabId, tabs, selectedTabId) {
 
     await chrome.scripting.executeScript({
         target: { tabId: targetTabId },
-        func: (overlayItems, currentSelectedTabId) => {
+        func: (overlayItems, currentSelectedTabId, hideAfterMs) => {
                 let container = document.getElementById('arcify-tab-switcher');
                 if (!container) {
                     container = document.createElement('div');
@@ -332,9 +352,9 @@ async function showTabSwitcherOverlay(targetTabId, tabs, selectedTabId) {
                 window.arcifyTabSwitcherHideTimer = setTimeout(() => {
                     document.getElementById('arcify-tab-switcher')?.remove();
                     window.arcifyTabSwitcherHideTimer = null;
-                }, 1300);
+                }, hideAfterMs);
         },
-        args: [overlayTabs, selectedTabId]
+        args: [overlayTabs, selectedTabId, TAB_SWITCHER_FALLBACK_TIMEOUT_MS]
     });
 }
 
@@ -385,7 +405,7 @@ async function hideTabSwitcherOverlay(tabId) {
     }
 }
 
-async function switchRecentTab() {
+async function switchRecentTab(step = 1) {
     const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!activeTab?.id || !activeTab.windowId) {
         return;
@@ -404,7 +424,7 @@ async function switchRecentTab() {
         tabSwitcherSession = {
             windowId: activeTab.windowId,
             tabs: sessionTabs,
-            currentIndex: 1,
+            currentIndex: step > 0 ? 1 : sessionTabs.length - 1,
             timeoutId: null
         };
     } else {
@@ -413,7 +433,8 @@ async function switchRecentTab() {
             resetTabSwitcherSession();
             return;
         }
-        tabSwitcherSession.currentIndex = (tabSwitcherSession.currentIndex + 1) % sessionTabs.length;
+        tabSwitcherSession.currentIndex =
+            (tabSwitcherSession.currentIndex + step + sessionTabs.length) % sessionTabs.length;
     }
 
     scheduleTabSwitcherSessionReset();
@@ -435,6 +456,12 @@ async function switchRecentTab() {
             hideTabSwitcherOverlay(activeTab.id);
         }, 150);
         pendingTabSwitcherHideTimers.set(activeTab.id, hideTimer);
+    }
+
+    // Option can be released while the asynchronous tab switch is still in
+    // progress. Finish the session here as well so that release is not lost.
+    if (tabSwitcherModifierReleased) {
+        await finishTabSwitcherSession();
     }
 }
 
@@ -913,7 +940,11 @@ chrome.tabs.onCreated.addListener(invalidateSpotlightSearchCache);
 // Optional: Listen for messages from options page to immediately update alarm
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
-    if (message.command === 'toggleSpotlightNewTab') {
+    if (message.action === 'tabSwitcherKeyUp') {
+        tabSwitcherModifierReleased = true;
+        void finishTabSwitcherSession(sender.tab?.id);
+        return false;
+    } else if (message.command === 'toggleSpotlightNewTab') {
         void injectSpotlightScript(SpotlightTabMode.NEW_TAB);
         return false;
     } else if (message.action === 'updateAutoArchiveSettings') {
